@@ -53,9 +53,15 @@ src/
   pages/             الشاشات
 ```
 
+## النشر
+
+- **الموقع:** https://logmnalsfran-del.github.io/logmnalsfran/ — يُبنى ويُنشر تلقائياً مع كل رفع إلى `main` (`.github/workflows/deploy.yml`).
+- **أسرار المستودع المطلوبة:** `SUPABASE_URL` و `SUPABASE_ANON_KEY`.
+- **إبقاء نشط:** `.github/workflows/keepalive.yml` كل 3 أيام — يمنع إيقاف مشروع Supabase المجاني، ويحدّث المستودع كل ~45 يوماً حتى لا تتعطل المهام المجدولة.
+
 ## الربط بـ Supabase
 
-1. في مشروع Supabase: **SQL Editor ← New query** والصق محتوى [`supabase/schema.sql`](supabase/schema.sql) ثم **Run**.
+1. في مشروع Supabase: **SQL Editor ← New query** والصق مخطط قاعدة البيانات `supabase/schema.sql` (محفوظ لدى المسؤول خارج المستودع) ثم **Run**.
    ينشئ 21 جدولاً مع العلاقات، وسياسات الوصول (RLS) لكل دور، وحماية الأشهر المقفلة، والفئات والإعدادات الافتراضية.
 2. انسخ `.env.example` إلى `.env` وضع **Project URL** و**Publishable key** من *Project Settings ← API*.
 3. شغّل التطبيق وأنشئ أول حساب — يصبح **المالك** تلقائياً — ثم أضف بقية المستخدمين من شاشة «المستخدمون».

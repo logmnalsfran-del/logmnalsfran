@@ -60,7 +60,7 @@ function RemoteLogin() {
       if (mode === 'login') await signInWithPassword(email, password);
       else {
         if (password.length < 8) throw new Error('كلمة المرور 8 أحرف على الأقل');
-        const { data, error: err } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { full_name: name.trim() } } });
+        const { data, error: err } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { full_name: name.trim() }, emailRedirectTo: window.location.origin + window.location.pathname } });
         if (err) throw err;
         if (data.user && data.user.identities?.length === 0) throw new Error('هذا البريد مسجّل مسبقاً — استخدم تسجيل الدخول');
         if (!data.session) {

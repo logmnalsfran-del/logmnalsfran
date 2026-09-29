@@ -85,7 +85,7 @@ function AddUser({ onClose, onDone }) {
     if (!v.fullName || !v.email || v.password.length < 8) return alert('أكمل الاسم والبريد، وكلمة مرور من 8 أحرف على الأقل');
     setBusy(true);
     try {
-      const { data, error } = await createSignupClient().auth.signUp({ email: v.email.trim(), password: v.password, options: { data: { full_name: v.fullName } } });
+      const { data, error } = await createSignupClient().auth.signUp({ email: v.email.trim(), password: v.password, options: { data: { full_name: v.fullName }, emailRedirectTo: window.location.origin + window.location.pathname } });
       if (error) throw error;
       if (!data.user?.id || data.user.identities?.length === 0) throw new Error('هذا البريد مسجّل مسبقاً');
       await updateProfile(data.user.id, { role: v.role, full_name: v.fullName });

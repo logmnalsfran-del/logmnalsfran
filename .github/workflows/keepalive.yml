@@ -1,0 +1,44 @@
+# إبقاء الخدمات نشطة:
+# 1) طلب دوري لقاعدة Supabase يمنع إيقاف المشروع المجاني بعد 7 أيام خمول
+# 2) تحديث بسيط للمستودع كل ~45 يوماً حتى لا يعطّل GitHub المهام المجدولة بعد 60 يوماً خمول
+name: Keep alive
+
+on:
+  schedule:
+    - cron: '17 3 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          for path in "rest/v1/settings?select=id&limit=1" "auth/v1/health"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -H "apikey: $SUPABASE_ANON_KEY" "$SUPABASE_URL/$path")
+            echo "$path -> $code"
+            if [ "$code" != "200" ]; then exit 1; fi
+          done
+
+      - uses: actions/checkout@v4
+
+      - name: Repository heartbeat
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 45 ]; then
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/heartbeat
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add .github/heartbeat
+            git commit -m "chore: keepalive heartbeat [skip ci]"
+            git push
+          else
+            echo "آخر تحديث منذ أقل من 45 يوماً — لا حاجة"
+          fi
