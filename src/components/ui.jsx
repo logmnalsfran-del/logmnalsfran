@@ -86,6 +86,18 @@ export function ExpiryBadge({ date }) {
   return <Badge tone={tone}>{text}</Badge>;
 }
 
+// تاريخ الانتهاء مع الأيام المتبقية دائماً (للتقارير)
+export function ExpiryCell({ date }) {
+  if (!date) return <span className="muted">—</span>;
+  const left = daysUntil(date);
+  const tone = left < 0 ? 'red' : left <= 30 ? 'orange' : left <= 90 ? 'navy' : 'green';
+  return (
+    <span className="nowrap">
+      {fmtDate(date)} <Badge tone={tone}>{left < 0 ? `منتهية منذ ${-left} يوم` : left === 0 ? 'اليوم' : `باقي ${left} يوم`}</Badge>
+    </span>
+  );
+}
+
 export function Button({ variant = 'primary', icon, children, ...rest }) {
   return (
     <button type="button" className={`btn btn-${variant}`} {...rest}>

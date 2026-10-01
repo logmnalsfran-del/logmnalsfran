@@ -265,6 +265,14 @@ export function scheduleStatus(db) {
   }).filter(Boolean);
 }
 
+// أقرب موظف/سيارة تنتهي له وثيقة معيّنة (مثل الإقامة أو الاستمارة أو الفحص الدوري)
+export function nearestExpiry(db, kind, docKey) {
+  const rows = kind === 'employee'
+    ? db.employees.filter((e) => e.status !== 'terminated').map((e) => ({ id: e.id, name: e.name, expiry: e.docs?.[docKey]?.expiry }))
+    : db.vehicles.filter((v) => v.status !== 'sold').map((v) => ({ id: v.id, name: v.plate, expiry: v.docs?.[docKey]?.expiry }));
+  return rows.filter((r) => r.expiry).sort((a, b) => a.expiry.localeCompare(b.expiry))[0] || null;
+}
+
 // ---------- سلسلة أشهر للتقارير ----------
 export function monthSeries(count, from) {
   return Array.from({ length: count }, (_, i) => addMonths(from, -(count - 1 - i)));

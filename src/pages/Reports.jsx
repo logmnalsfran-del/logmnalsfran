@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDb, useSession } from '../lib/db';
-import { PageHeader, Card, Button, Tabs, MonthSelect, Badge, Bar, ExpiryBadge, SearchBox } from '../components/ui';
+import { PageHeader, Card, Button, Tabs, MonthSelect, Badge, Bar, ExpiryCell, SearchBox } from '../components/ui';
 import {
   shipmentsByEmployee, ruleForEmployee, payrollFor, employedInMonth, monthSeries, expensesByCategory, profitFor, vehicleCosts,
   currentCustody, custodyOfEmployee,
@@ -120,8 +120,9 @@ function TrendReport() {
 
 function VehicleReport({ money_ }) {
   const db = useDb();
-  const [f, setF] = useState({ status: 'fleet', make: '', driver: '', from: '', to: '', q: '' });
+  const [f, setF] = useState({ status: 'fleet', make: '', driver: '', from: '', to: '', q: '', doc: 'registration', sort: 'expiry' });
   const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
+  const docName = labelOf('vehDocs', f.doc);
   const range = f.from || f.to ? { from: f.from, to: f.to } : null;
   const makes = [...new Set(db.vehicles.map((v) => v.make).filter(Boolean))].sort();
   const driverOf = (v) => { const c = currentCustody(db, v.id); return c ? db.employees.find((e) => e.id === c.employeeId) : null; };
@@ -130,13 +131,16 @@ function VehicleReport({ money_ }) {
     .filter((v) => !f.make || v.make === f.make)
     .filter((v) => !f.driver || (f.driver === 'none' ? !driverOf(v) : driverOf(v)?.id === f.driver))
     .filter((v) => !f.q || [v.plate, v.model, v.vin].some((x) => String(x || '').includes(f.q)))
-    .map((v) => ({ v, c: vehicleCosts(db, v, range), d: driverOf(v) }))
-    .sort((a, b) => b.c.running - a.c.running);
+    .map((v) => ({ v, c: vehicleCosts(db, v, range), d: driverOf(v), expiry: v.docs?.[f.doc]?.expiry || '' }))
+    .sort((a, b) => (f.sort === 'expiry'
+      ? (a.expiry || '9999').localeCompare(b.expiry || '9999')
+      : b.c.running - a.c.running));
+  const nearest = f.sort === 'expiry' && rows[0]?.expiry ? rows[0] : null;
   const max = Math.max(1, ...rows.map((r) => r.c.running));
   const period = range ? `${f.from ? monthLabel(f.from) : 'البداية'} — ${f.to ? monthLabel(f.to) : 'الآن'}` : 'منذ الشراء';
   const sum = (k) => rows.reduce((s, r) => s + r.c[k], 0);
-  const exportCsv = () => downloadCSV('تقرير-السيارات', ['اللوحة', 'السيارة', 'السنة', 'الحالة', 'المندوب', 'العداد', ...(money_ ? ['سعر الشراء'] : []), 'الصيانة', 'الوقود', 'الحوادث', 'أخرى', 'تكاليف التشغيل', 'الفترة'],
-    rows.map(({ v, c, d }) => [v.plate, `${v.make} ${v.model}`, v.year, VEH_STATUS[v.status].label, d?.name || '', v.odometer, ...(money_ ? [c.purchase] : []), c.maintenance, c.fuel, c.incidents, c.other, c.running, period]));
+  const exportCsv = () => downloadCSV('تقرير-السيارات', ['اللوحة', 'السيارة', 'السنة', 'الحالة', 'المندوب', 'العداد', `انتهاء ${docName}`, 'الأيام المتبقية', ...(money_ ? ['سعر الشراء'] : []), 'الصيانة', 'الوقود', 'الحوادث', 'أخرى', 'تكاليف التشغيل', 'الفترة'],
+    rows.map(({ v, c, d, expiry }) => [v.plate, `${v.make} ${v.model}`, v.year, VEH_STATUS[v.status].label, d?.name || '', v.odometer, expiry, expiry ? daysUntil(expiry) : '', ...(money_ ? [c.purchase] : []), c.maintenance, c.fuel, c.incidents, c.other, c.running, period]));
   return (
     <Card flush title={`السيارات وتكاليف التشغيل — ${period}`} actions={<Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button>}>
       <div className="toolbar no-print" style={{ padding: '12px 20px 0' }}>
@@ -152,19 +156,33 @@ function VehicleReport({ money_ }) {
           <option value="">كل المناديب</option><option value="none">بدون عهدة</option>
           {db.employees.filter((e) => isDriver(e)).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
         </select>
+        <select value={f.doc} onChange={set('doc')} aria-label="الوثيقة">
+          {listOf('vehDocs', db).map((t) => <option key={t.key} value={t.key}>وثيقة: {t.name}</option>)}
+        </select>
+        <select value={f.sort} onChange={set('sort')} aria-label="الترتيب">
+          <option value="expiry">ترتيب: الأقرب انتهاءً</option><option value="cost">ترتيب: الأعلى تكلفة</option>
+        </select>
         <label className="small muted">من <input type="month" value={f.from} onChange={set('from')} style={{ width: 150 }} /></label>
         <label className="small muted">إلى <input type="month" value={f.to} onChange={set('to')} style={{ width: 150 }} /></label>
-        {(range || f.make || f.driver || f.q || f.status !== 'fleet') && <button type="button" className="btn-link" onClick={() => setF({ status: 'fleet', make: '', driver: '', from: '', to: '', q: '' })}>مسح الفلاتر</button>}
+        {(range || f.make || f.driver || f.q || f.status !== 'fleet') && <button type="button" className="btn-link" onClick={() => setF({ ...f, status: 'fleet', make: '', driver: '', from: '', to: '', q: '' })}>مسح الفلاتر</button>}
       </div>
+      {nearest && (
+        <div style={{ padding: '12px 20px 0' }}>
+          <div className="notice n-warn" style={{ margin: 0 }}>
+            أقرب سيارة تحتاج تجديد <strong>{docName}</strong>: <Link to={`/vehicles/${nearest.v.id}`}><strong>{nearest.v.plate}</strong></Link> ({nearest.v.make} {nearest.v.model}) — <ExpiryCell date={nearest.expiry} />
+          </div>
+        </div>
+      )}
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>السيارة</th><th>الحالة</th><th>المندوب</th>{money_ && <th className="money">الشراء</th>}<th className="money">الصيانة</th><th className="money">الوقود</th><th className="money">الحوادث</th><th className="money">تكاليف التشغيل</th><th style={{ width: '12%' }} /></tr></thead>
+          <thead><tr><th>السيارة</th><th>الحالة</th><th>المندوب</th><th>انتهاء {docName}</th>{money_ && <th className="money">الشراء</th>}<th className="money">الصيانة</th><th className="money">الوقود</th><th className="money">الحوادث</th><th className="money">تكاليف التشغيل</th><th style={{ width: '12%' }} /></tr></thead>
           <tbody>
-            {rows.map(({ v, c, d }) => (
+            {rows.map(({ v, c, d, expiry }) => (
               <tr key={v.id}>
                 <td><Link to={`/vehicles/${v.id}`}>{v.plate}</Link><div className="sub">{v.make} {v.model} · {v.year}</div></td>
                 <td><Badge tone={VEH_STATUS[v.status].tone}>{VEH_STATUS[v.status].label}</Badge></td>
                 <td>{d?.name || <span className="muted">—</span>}</td>
+                <td><ExpiryCell date={expiry} /></td>
                 {money_ && <td className="money num">{money(c.purchase)}</td>}
                 <td className="money num">{money(c.maintenance)}</td><td className="money num">{money(c.fuel)}</td>
                 <td className="money num">{money(c.incidents)}</td><td className="money num strong">{money(c.running)}</td>
@@ -172,7 +190,7 @@ function VehicleReport({ money_ }) {
               </tr>
             ))}
           </tbody>
-          <tfoot><tr><td colSpan={3}>الإجمالي ({rows.length} سيارة)</td>{money_ && <td className="money num">{money(sum('purchase'))}</td>}<td className="money num">{money(sum('maintenance'))}</td><td className="money num">{money(sum('fuel'))}</td><td className="money num">{money(sum('incidents'))}</td><td className="money num">{money(sum('running'))}</td><td /></tr></tfoot>
+          <tfoot><tr><td colSpan={4}>الإجمالي ({rows.length} سيارة)</td>{money_ && <td className="money num">{money(sum('purchase'))}</td>}<td className="money num">{money(sum('maintenance'))}</td><td className="money num">{money(sum('fuel'))}</td><td className="money num">{money(sum('incidents'))}</td><td className="money num">{money(sum('running'))}</td><td /></tr></tfoot>
         </table>
       </div>
     </Card>
@@ -181,7 +199,8 @@ function VehicleReport({ money_ }) {
 
 function EmployeesReport({ money_ }) {
   const db = useDb();
-  const [f, setF] = useState({ type: '', status: 'current', nationality: '', q: '', month: thisMonth() });
+  const [f, setF] = useState({ type: '', status: 'current', nationality: '', q: '', month: thisMonth(), doc: 'iqama', sort: 'expiry' });
+  const docName = labelOf('empDocs', f.doc);
   const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
   const nationalities = [...new Set(db.employees.map((e) => e.nationality).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
   const counts = shipmentsByEmployee(db, f.month);
@@ -191,13 +210,16 @@ function EmployeesReport({ money_ }) {
     .filter((e) => (f.status === 'current' ? e.status !== 'terminated' : f.status === 'all' ? true : e.status === f.status))
     .filter((e) => !f.nationality || e.nationality === f.nationality)
     .filter((e) => !f.q || [e.name, e.nationalId, e.phone].some((x) => String(x || '').includes(f.q)))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
     .map((e) => {
       const c = custodyOfEmployee(db, e.id);
-      return { e, plate: c ? db.vehicles.find((v) => v.id === c.vehicleId)?.plate : '', shipments: counts[e.id] || 0, net: pay?.rows.find((r) => r.employeeId === e.id)?.net };
-    });
-  const exportCsv = () => downloadCSV(`تقرير-العمالة-${f.month}`, ['الاسم', 'نوع العمالة', 'المسمى', 'الجنسية', 'الهوية/الإقامة', 'الجوال', 'تاريخ التعيين', 'الحالة', 'السيارة', `شحنات ${f.month}`, ...(money_ ? ['الراتب الأساسي', 'البدلات', `صافي راتب ${f.month}`] : [])],
-    rows.map(({ e, plate, shipments, net }) => [e.name, labelOf('jobTypes', e.role), e.title, e.nationality, e.nationalId, e.phone, e.hireDate, EMP_STATUS[e.status].label, plate, isDriver(e) ? shipments : '', ...(money_ ? [e.baseSalary, e.allowances, net ?? ''] : [])]));
+      return { e, expiry: e.docs?.[f.doc]?.expiry || '', plate: c ? db.vehicles.find((v) => v.id === c.vehicleId)?.plate : '', shipments: counts[e.id] || 0, net: pay?.rows.find((r) => r.employeeId === e.id)?.net };
+    })
+    .sort((a, b) => (f.sort === 'expiry'
+      ? (a.expiry || '9999').localeCompare(b.expiry || '9999') || a.e.name.localeCompare(b.e.name, 'ar')
+      : a.e.name.localeCompare(b.e.name, 'ar')));
+  const nearest = f.sort === 'expiry' && rows[0]?.expiry ? rows[0] : null;
+  const exportCsv = () => downloadCSV(`تقرير-العمالة-${f.month}`, ['الاسم', 'نوع العمالة', 'المسمى', 'الجنسية', 'الهوية/الإقامة', 'الجوال', 'تاريخ التعيين', 'الحالة', `انتهاء ${docName}`, 'الأيام المتبقية', 'السيارة', `شحنات ${f.month}`, ...(money_ ? ['الراتب الأساسي', 'البدلات', `صافي راتب ${f.month}`] : [])],
+    rows.map(({ e, plate, shipments, net, expiry }) => [e.name, labelOf('jobTypes', e.role), e.title, e.nationality, e.nationalId, e.phone, e.hireDate, EMP_STATUS[e.status].label, expiry, expiry ? daysUntil(expiry) : '', plate, isDriver(e) ? shipments : '', ...(money_ ? [e.baseSalary, e.allowances, net ?? ''] : [])]));
   return (
     <Card flush title={`تقرير العمالة — ${rows.length} موظف`} actions={<><MonthSelect value={f.month} onChange={set('month')} /><Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button></>}>
       <div className="toolbar no-print" style={{ padding: '12px 20px 0' }}>
@@ -212,17 +234,30 @@ function EmployeesReport({ money_ }) {
         <select value={f.nationality} onChange={set('nationality')} aria-label="الجنسية">
           <option value="">كل الجنسيات</option>{nationalities.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
+        <select value={f.doc} onChange={set('doc')} aria-label="الوثيقة">
+          {listOf('empDocs', db).map((t) => <option key={t.key} value={t.key}>وثيقة: {t.name}</option>)}
+        </select>
+        <select value={f.sort} onChange={set('sort')} aria-label="الترتيب">
+          <option value="expiry">ترتيب: الأقرب انتهاءً</option><option value="name">ترتيب: الاسم</option>
+        </select>
         {(f.type || f.nationality || f.q || f.status !== 'current') && <button type="button" className="btn-link" onClick={() => setF({ ...f, type: '', status: 'current', nationality: '', q: '' })}>مسح الفلاتر</button>}
       </div>
+      {nearest && (
+        <div style={{ padding: '12px 20px 0' }}>
+          <div className="notice n-warn" style={{ margin: 0 }}>
+            أقرب موظف تنتهي <strong>{docName}</strong> الخاصة به: <Link to={`/employees/${nearest.e.id}`}><strong>{nearest.e.name}</strong></Link> — <ExpiryCell date={nearest.expiry} />
+          </div>
+        </div>
+      )}
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>الاسم</th><th>نوع العمالة</th><th>الجنسية</th><th>تاريخ التعيين</th><th>السيارة</th><th>شحنات الشهر</th>{money_ && <><th className="money">الأساسي + البدلات</th><th className="money">صافي الشهر</th></>}<th>الحالة</th></tr></thead>
+          <thead><tr><th>الاسم</th><th>نوع العمالة</th><th>الجنسية</th><th>انتهاء {docName}</th><th>السيارة</th><th>شحنات الشهر</th>{money_ && <><th className="money">الأساسي + البدلات</th><th className="money">صافي الشهر</th></>}<th>الحالة</th></tr></thead>
           <tbody>
-            {rows.map(({ e, plate, shipments, net }) => (
+            {rows.map(({ e, plate, shipments, net, expiry }) => (
               <tr key={e.id}>
                 <td><Link to={`/employees/${e.id}`}>{e.name}</Link><div className="sub">{e.nationalId}</div></td>
                 <td>{labelOf('jobTypes', e.role)}{e.title && <div className="sub">{e.title}</div>}</td>
-                <td>{e.nationality || '—'}</td><td>{fmtDate(e.hireDate)}</td><td>{plate || '—'}</td>
+                <td>{e.nationality || '—'}</td><td><ExpiryCell date={expiry} /></td><td>{plate || '—'}</td>
                 <td className="num">{isDriver(e) ? fmtInt(shipments) : '—'}</td>
                 {money_ && <><td className="money num">{money(Number(e.baseSalary || 0) + Number(e.allowances || 0))}</td><td className="money num strong">{net !== undefined ? money(net) : '—'}</td></>}
                 <td><Badge tone={EMP_STATUS[e.status].tone}>{EMP_STATUS[e.status].label}</Badge></td>
@@ -290,14 +325,26 @@ function ProfitReport() {
 
 function DocsReport() {
   const db = useDb();
-  const [filter, setFilter] = useState('90');
+  const [filter, setFilter] = useState('all');
+  const [kind, setKind] = useState('');
+  const [doc, setDoc] = useState('');
   const rows = [
-    ...db.employees.filter((e) => e.status !== 'terminated').flatMap((e) => entriesOf('empDocs').map(([k, label]) => ({ owner: e.name, to: `/employees/${e.id}`, type: 'موظف', label, number: e.docs?.[k]?.number, expiry: e.docs?.[k]?.expiry }))),
-    ...db.vehicles.filter((v) => v.status !== 'sold').flatMap((v) => entriesOf('vehDocs').map(([k, label]) => ({ owner: `سيارة ${v.plate}`, to: `/vehicles/${v.id}`, type: 'سيارة', label, number: v.docs?.[k]?.number, expiry: v.docs?.[k]?.expiry }))),
-  ].filter((r) => r.expiry && (filter === 'all' || daysUntil(r.expiry) <= Number(filter))).sort((a, b) => a.expiry.localeCompare(b.expiry));
+    ...db.employees.filter((e) => e.status !== 'terminated').flatMap((e) => entriesOf('empDocs').map(([k, label]) => ({ owner: e.name, to: `/employees/${e.id}`, type: 'موظف', key: `e:${k}`, label, number: e.docs?.[k]?.number, expiry: e.docs?.[k]?.expiry }))),
+    ...db.vehicles.filter((v) => v.status !== 'sold').flatMap((v) => entriesOf('vehDocs').map(([k, label]) => ({ owner: `سيارة ${v.plate}`, to: `/vehicles/${v.id}`, type: 'سيارة', key: `v:${k}`, label, number: v.docs?.[k]?.number, expiry: v.docs?.[k]?.expiry }))),
+  ].filter((r) => r.expiry && (filter === 'all' || daysUntil(r.expiry) <= Number(filter)))
+    .filter((r) => (!kind || r.type === kind) && (!doc || r.key === doc))
+    .sort((a, b) => a.expiry.localeCompare(b.expiry));
   const exportCsv = () => downloadCSV('الوثائق', ['الجهة', 'النوع', 'الوثيقة', 'الرقم', 'تاريخ الانتهاء', 'الأيام المتبقية'], rows.map((r) => [r.owner, r.type, r.label, r.number, r.expiry, daysUntil(r.expiry)]));
   return (
     <Card flush title="الوثائق وتواريخ الانتهاء" actions={<>
+      <select value={kind} onChange={(e) => { setKind(e.target.value); setDoc(''); }} style={{ width: 'auto' }} aria-label="الجهة">
+        <option value="">الموظفون والسيارات</option><option value="موظف">الموظفون</option><option value="سيارة">السيارات</option>
+      </select>
+      <select value={doc} onChange={(e) => setDoc(e.target.value)} style={{ width: 'auto' }} aria-label="نوع الوثيقة">
+        <option value="">كل الوثائق</option>
+        {kind !== 'سيارة' && entriesOf('empDocs').map(([k, n]) => <option key={`e:${k}`} value={`e:${k}`}>{n}</option>)}
+        {kind !== 'موظف' && entriesOf('vehDocs').map(([k, n]) => <option key={`v:${k}`} value={`v:${k}`}>{n}</option>)}
+      </select>
       <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ width: 'auto' }} aria-label="المدة">
         <option value="0">المنتهية فقط</option><option value="30">خلال 30 يوماً</option><option value="90">خلال 90 يوماً</option><option value="all">الكل</option>
       </select>
@@ -307,7 +354,7 @@ function DocsReport() {
           <thead><tr><th>الجهة</th><th>الوثيقة</th><th>الرقم</th><th>الحالة</th></tr></thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={i}><td><Link to={r.to}>{r.owner}</Link> <span className="sub">{r.type}</span></td><td>{r.label}</td><td className="num">{r.number || '—'}</td><td><ExpiryBadge date={r.expiry} /></td></tr>
+              <tr key={i}><td><Link to={r.to}>{r.owner}</Link> <span className="sub">{r.type}</span></td><td>{r.label}</td><td className="num">{r.number || '—'}</td><td><ExpiryCell date={r.expiry} /></td></tr>
             ))}
           </tbody>
         </table>

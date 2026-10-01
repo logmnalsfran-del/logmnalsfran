@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useDb, useSession } from '../lib/db';
-import { PageHeader, Stat, Card, Badge, Bar, Empty } from '../components/ui';
+import { PageHeader, Stat, Card, Badge, Bar, Empty, ExpiryCell } from '../components/ui';
 import {
-  alerts, shipmentsByEmployee, payrollFor, profitFor, reserveBalance, expensesByCategory, incentiveRuleFor, currentCustody,
+  alerts, nearestExpiry, shipmentsByEmployee, payrollFor, profitFor, reserveBalance, expensesByCategory, incentiveRuleFor, currentCustody,
 } from '../lib/calc';
 import { thisMonth, monthLabel, money, fmtInt, fmtDate, today } from '../lib/format';
 import { VEH_STATUS } from '../lib/constants';
@@ -32,6 +32,13 @@ export default function Dashboard() {
   const ranking = drivers.map((d) => ({ d, n: counts[d.id] || 0 })).sort((a, b) => b.n - a.n);
   const maxN = Math.max(rule.threshold, ...ranking.map((r) => r.n));
 
+  const upcoming = [
+    { label: 'أقرب إقامة تنتهي', to: 'employees', item: nearestExpiry(db, 'employee', 'iqama') },
+    { label: 'أقرب استمارة (ترخيص) تحتاج تجديد', to: 'vehicles', item: nearestExpiry(db, 'vehicle', 'registration') },
+    { label: 'أقرب فحص دوري', to: 'vehicles', item: nearestExpiry(db, 'vehicle', 'inspection') },
+    { label: 'أقرب تأمين سيارة', to: 'vehicles', item: nearestExpiry(db, 'vehicle', 'insurance') },
+  ];
+
   const statusCount = Object.keys(VEH_STATUS).map((k) => ({ k, n: db.vehicles.filter((v) => v.status === k).length }));
 
   return (
@@ -52,6 +59,20 @@ export default function Dashboard() {
           <Stat icon="lock" tone="teal" label="رصيد حساب استرداد رأس المال" value={money(reserveBalance(db))} hint="حساب منفصل" />
         </>}
       </div>
+
+      <Card title="أقرب المواعيد" actions={<Link to="/reports" className="small">التقارير والفلاتر</Link>}>
+        <table className="table compact">
+          <tbody>
+            {upcoming.map((u) => (
+              <tr key={u.label}>
+                <td style={{ width: '34%' }}>{u.label}</td>
+                <td>{u.item ? <Link to={`/${u.to}/${u.item.id}`}><strong>{u.item.name}</strong></Link> : <span className="muted">لا توجد بيانات</span>}</td>
+                <td>{u.item && <ExpiryCell date={u.item.expiry} />}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
 
       <div className="grid grid-2">
         <Card title="التنبيهات" actions={<Badge tone="orange">خلال {db.settings.alertDays} يوماً</Badge>}>
