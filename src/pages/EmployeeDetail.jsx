@@ -3,10 +3,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useDb, useSession, remove } from '../lib/db';
 import { PageHeader, Card, Button, Badge, ExpiryBadge, Empty } from '../components/ui';
 import EmployeeForm from '../components/EmployeeForm';
-import { JOBS, EMP_STATUS, EMP_DOCS, INCIDENT_KINDS } from '../lib/constants';
+import { EMP_STATUS } from '../lib/constants';
 import { shipmentsByEmployee, ruleForEmployee, payrollFor, monthSeries } from '../lib/calc';
 import { thisMonth, monthLabel, money, fmtDate, fmtInt } from '../lib/format';
 import { canEdit, seesMoney } from '../lib/permissions';
+import { entriesOf, labelOf, isDriver } from '../lib/lookups';
 
 export default function EmployeeDetail() {
   const { id } = useParams();
@@ -34,7 +35,7 @@ export default function EmployeeDetail() {
     nav('/employees');
   };
 
-  const history = e.role === 'driver' ? monthSeries(6, M).reverse().map((m) => {
+  const history = isDriver(e) ? monthSeries(6, M).reverse().map((m) => {
     const n = shipmentsByEmployee(db, m)[e.id] || 0;
     const rule = ruleForEmployee(db, e, m);
     const row = showMoney ? payrollFor(db, m).rows.find((r) => r.employeeId === e.id) : null;
@@ -43,7 +44,7 @@ export default function EmployeeDetail() {
 
   return (
     <>
-      <PageHeader title={e.name} subtitle={<>{JOBS[e.role]} · <Badge tone={EMP_STATUS[e.status].tone}>{EMP_STATUS[e.status].label}</Badge></>}>
+      <PageHeader title={e.name} subtitle={<>{labelOf('jobTypes', e.role)} · <Badge tone={EMP_STATUS[e.status].tone}>{EMP_STATUS[e.status].label}</Badge></>}>
         <Button variant="ghost" icon="back" onClick={() => nav('/employees')}>رجوع</Button>
         {editable && <Button icon="edit" onClick={() => setEditing(true)}>تعديل</Button>}
         {role === 'owner' && <Button variant="danger" icon="trash" onClick={del}>حذف</Button>}
@@ -57,12 +58,12 @@ export default function EmployeeDetail() {
           <div><span>الجوال</span><strong className="num">{e.phone || '—'}</strong></div>
           <div><span>تاريخ الميلاد</span><strong>{fmtDate(e.birthDate)}</strong></div>
           <div><span>تاريخ التعيين</span><strong>{fmtDate(e.hireDate)}</strong></div>
-          {e.role === 'driver' && <div><span>رقمه في تطبيق الشركة الرئيسية</span><strong>{e.externalId || '—'}</strong></div>}
+          {isDriver(e) && <div><span>رقمه في تطبيق الشركة الرئيسية</span><strong>{e.externalId || '—'}</strong></div>}
           {showMoney && <>
             <div><span>الراتب الأساسي</span><strong>{money(e.baseSalary)}</strong></div>
             <div><span>البدلات</span><strong>{money(e.allowances)}</strong></div>
             <div><span>الآيبان</span><strong className="num">{e.iban || '—'}</strong></div>
-            {e.role === 'driver' && <div><span>الحافز</span><strong>{e.incentiveOverride?.enabled ? `خاص: فوق ${fmtInt(e.incentiveOverride.threshold)} × ${e.incentiveOverride.rate} ر.س` : 'حسب الإعداد العام'}</strong></div>}
+            {isDriver(e) && <div><span>الحافز</span><strong>{e.incentiveOverride?.enabled ? `خاص: فوق ${fmtInt(e.incentiveOverride.threshold)} × ${e.incentiveOverride.rate} ر.س` : 'حسب الإعداد العام'}</strong></div>}
           </>}
         </div>
         {e.notes && <p className="muted" style={{ marginBottom: 0 }}>{e.notes}</p>}
@@ -73,7 +74,7 @@ export default function EmployeeDetail() {
           <table className="table compact">
             <thead><tr><th>الوثيقة</th><th>الرقم</th><th>الانتهاء</th></tr></thead>
             <tbody>
-              {Object.entries(EMP_DOCS).map(([k, label]) => (
+              {entriesOf('empDocs').map(([k, label]) => (
                 <tr key={k}><td>{label}</td><td className="num">{e.docs?.[k]?.number || '—'}</td><td><ExpiryBadge date={e.docs?.[k]?.expiry} /></td></tr>
               ))}
             </tbody>
@@ -101,7 +102,7 @@ export default function EmployeeDetail() {
         </Card>
       </div>
 
-      {e.role === 'driver' && (
+      {isDriver(e) && (
         <Card title="الشحنات والحوافز (آخر 6 أشهر)" flush>
           <div className="table-wrap">
             <table className="table">
@@ -131,7 +132,7 @@ export default function EmployeeDetail() {
             <tbody>
               {incidents.map((i) => (
                 <tr key={i.id}>
-                  <td>{fmtDate(i.date)}</td><td>{INCIDENT_KINDS[i.kind]}</td><td>{i.description}</td>
+                  <td>{fmtDate(i.date)}</td><td>{labelOf('incidentKinds', i.kind)}</td><td>{i.description}</td>
                   <td>{db.vehicles.find((v) => v.id === i.vehicleId)?.plate}</td><td className="money num">{money(i.cost)}</td>
                 </tr>
               ))}

@@ -3,15 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { useDb, useSession } from '../lib/db';
 import { PageHeader, Card, Button, Badge, ExpiryBadge, SearchBox, Tabs, Empty } from '../components/ui';
 import EmployeeForm from '../components/EmployeeForm';
-import { JOBS, EMP_STATUS, EMP_DOCS } from '../lib/constants';
+import { EMP_STATUS } from '../lib/constants';
 import { custodyOfEmployee } from '../lib/calc';
 import { money } from '../lib/format';
 import { canEdit, seesMoney } from '../lib/permissions';
 import { downloadCSV } from '../lib/export';
+import { entriesOf, labelOf, isDriver, listOf } from '../lib/lookups';
 
 // أقرب وثيقة انتهاءً لكل موظف
 function nearestDoc(e) {
-  return Object.entries(EMP_DOCS)
+  return entriesOf('empDocs')
     .map(([k, label]) => ({ label, expiry: e.docs?.[k]?.expiry }))
     .filter((d) => d.expiry)
     .sort((a, b) => a.expiry.localeCompare(b.expiry))[0];
@@ -41,7 +42,7 @@ export default function Employees() {
   };
 
   const exportCsv = () => downloadCSV('الموظفون', ['الاسم', 'الفئة', 'الهوية/الإقامة', 'الجنسية', 'الجوال', 'تاريخ التعيين', 'الحالة', ...(showMoney ? ['الراتب', 'البدلات'] : []), 'انتهاء الإقامة', 'انتهاء الرخصة'],
-    list.map((e) => [e.name, JOBS[e.role], e.nationalId, e.nationality, e.phone, e.hireDate, EMP_STATUS[e.status].label, ...(showMoney ? [e.baseSalary, e.allowances] : []), e.docs?.iqama?.expiry, e.docs?.license?.expiry]));
+    list.map((e) => [e.name, labelOf('jobTypes', e.role), e.nationalId, e.nationality, e.phone, e.hireDate, EMP_STATUS[e.status].label, ...(showMoney ? [e.baseSalary, e.allowances] : []), e.docs?.iqama?.expiry, e.docs?.license?.expiry]));
 
   return (
     <>
@@ -52,10 +53,7 @@ export default function Employees() {
 
       <Tabs active={tab} onChange={setTab} tabs={[
         { key: 'all', label: 'الكل', count: count('all') },
-        { key: 'driver', label: 'المناديب', count: count('driver') },
-        { key: 'supervisor', label: 'المشرفون', count: count('supervisor') },
-        { key: 'maintenance', label: 'الصيانة', count: count('maintenance') },
-        { key: 'other', label: 'أخرى', count: count('other') },
+        ...listOf('jobTypes', db).map((t) => ({ key: t.key, label: t.name, count: count(t.key) })),
       ]} />
 
       <div className="toolbar">
@@ -84,9 +82,9 @@ export default function Employees() {
                   return (
                     <tr key={e.id} className="clickable" onClick={() => nav(`/employees/${e.id}`)}>
                       <td><strong>{e.name}</strong><div className="sub">{e.nationality} · {e.nationalId}</div></td>
-                      <td>{JOBS[e.role]}{e.externalId && <div className="sub">{e.externalId}</div>}</td>
+                      <td>{labelOf('jobTypes', e.role)}{e.externalId && <div className="sub">{e.externalId}</div>}</td>
                       <td><span className="num">{e.phone}</span></td>
-                      <td>{e.role === 'driver' ? (plate(e) || <span className="muted">—</span>) : ''}</td>
+                      <td>{isDriver(e) ? (plate(e) || <span className="muted">—</span>) : ''}</td>
                       {showMoney && <td className="money num">{money(Number(e.baseSalary) + Number(e.allowances || 0))}</td>}
                       <td>{d ? <><span className="sub">{d.label}</span> <ExpiryBadge date={d.expiry} /></> : '—'}</td>
                       <td><Badge tone={EMP_STATUS[e.status].tone}>{EMP_STATUS[e.status].label}</Badge></td>

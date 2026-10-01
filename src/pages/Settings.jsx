@@ -5,12 +5,14 @@ import { PageHeader, Card, Button, Field, FormGrid, Badge, IconButton, Notice } 
 import { incentiveRuleFor } from '../lib/calc';
 import { thisMonth, monthLabel, uid, today, fmtInt, money } from '../lib/format';
 import { downloadBlob } from '../lib/export';
+import { insert, update, remove } from '../lib/db';
+import { LISTS, listOf } from '../lib/lookups';
 
 export default function Settings() {
   const db = useDb();
   const s = db.settings;
   const [general, setGeneral] = useState({ companyName: s.companyName, alertDays: s.alertDays, revenuePerShipment: s.revenuePerShipment });
-  const [dep, setDep] = useState(s.depreciation || { method: 'straight_line', fixedAmount: 0 });
+  const [cap, setCap] = useState({ defaultRecoveryPct: s.defaultRecoveryPct || 0, capitalAmount: s.capitalAmount || 0 });
   const [rule, setRule] = useState({ from: thisMonth(), threshold: incentiveRuleFor(db, thisMonth()).threshold, rate: incentiveRuleFor(db, thisMonth()).rate, note: '' });
   const fileRef = useRef();
   const [busy, setBusy] = useState(false);
@@ -24,9 +26,11 @@ export default function Settings() {
     updateSettings({ companyName: general.companyName.trim() || 'الشركة اللوجستية', alertDays: Number(general.alertDays) || 30, revenuePerShipment: Number(general.revenuePerShipment) || 0 }, 'تحديث الإعدادات العامة');
     alert('تم الحفظ');
   };
-  const saveDep = () => {
-    updateSettings({ depreciation: { method: dep.method, fixedAmount: Number(dep.fixedAmount) || 0 } }, `تغيير طريقة مخصص الهالك إلى ${dep.method === 'fixed' ? `مبلغ ثابت ${dep.fixedAmount}` : 'القسط الثابت لكل سيارة'}`);
-    alert('تم الحفظ. الأشهر المقفلة لا تتأثر.');
+  const saveCap = () => {
+    const pct = Number(cap.defaultRecoveryPct) || 0;
+    if (pct < 0 || pct > 100) return alert('النسبة بين 0 و 100');
+    updateSettings({ defaultRecoveryPct: pct, capitalAmount: Number(cap.capitalAmount) || 0 }, `إعدادات استرداد رأس المال: النسبة الافتراضية ${pct}%`);
+    alert('تم الحفظ. الإيرادات المسجلة سابقاً تحتفظ بنسبها.');
   };
   const addRule = () => {
     if (!rule.from || !(Number(rule.threshold) >= 0) || !(Number(rule.rate) >= 0)) return alert('أكمل الحقول');
@@ -58,7 +62,7 @@ export default function Settings() {
 
   return (
     <>
-      <PageHeader title="الإعدادات" subtitle="قيم الحافز، التنبيهات، مخصص الهالك، والنسخ الاحتياطي" />
+      <PageHeader title="الإعدادات" subtitle="قيم الحافز، القوائم، استرداد رأس المال، التنبيهات، والنسخ الاحتياطي" />
 
       <Card title="حافز المناديب" actions={<Badge tone="teal">الساري الآن: فوق {fmtInt(current.threshold)} شحنة × {current.rate} ر.س</Badge>}>
         <Notice>كل قاعدة لها <strong>شهر سريان</strong>: تُطبَّق من ذلك الشهر فصاعداً حتى تحلّ محلها قاعدة أحدث، فلا يتغير حساب الأشهر السابقة. الأشهر المعتمدة رواتبها مثبّتة في كل الأحوال. يمكن أيضاً تحديد حافز خاص لمندوب معيّن من صفحة تعديل بياناته.</Notice>
@@ -94,18 +98,19 @@ export default function Settings() {
           <div style={{ marginTop: 14 }}><Button icon="check" onClick={saveGeneral}>حفظ</Button></div>
         </Card>
 
-        <Card title="مخصص الهالك">
+        <Card title="استرداد رأس المال">
           <FormGrid cols={1}>
-            <Field label="طريقة الاحتساب" as="select" value={dep.method} onChange={(e) => setDep({ ...dep, method: e.target.value })} options={[
-              { value: 'straight_line', label: 'القسط الثابت لكل سيارة (سعر الشراء − القيمة المتبقية) ÷ العمر الإنتاجي' },
-              { value: 'fixed', label: 'مبلغ شهري ثابت يحدده المالك' },
-            ]} />
-            {dep.method === 'fixed' && <Field label="المبلغ الشهري (ر.س)" type="number" min="0" value={dep.fixedAmount} onChange={(e) => setDep({ ...dep, fixedAmount: e.target.value })} hint={`الحالي: ${money(s.depreciation?.fixedAmount || 0)}`} />}
+            <Field label="النسبة الافتراضية من الإيراد (%)" type="number" min="0" max="100" step="0.5" value={cap.defaultRecoveryPct} onChange={(e) => setCap({ ...cap, defaultRecoveryPct: e.target.value })}
+              hint="تُقترح عند تسجيل أول إيراد، وبعدها تُقترح آخر نسبة استخدمتها. تستطيع تغيير النسبة مع كل إيراد." />
+            <Field label="رأس المال المستثمر (ر.س)" type="number" min="0" value={cap.capitalAmount} onChange={(e) => setCap({ ...cap, capitalAmount: e.target.value })}
+              hint="اتركه 0 ليُحسب تلقائياً من مجموع أسعار شراء السيارات." />
           </FormGrid>
-          <p className="small muted">يُخصم المخصص من الأرباح شهرياً ويُرحَّل عند إقفال الشهر إلى حساب مخصص الهالك المنفصل.</p>
-          <Button icon="check" onClick={saveDep}>حفظ</Button>
+          <p className="small muted">تُستقطع النسبة من الأرباح شهرياً وتُرحَّل عند إقفال الشهر إلى حساب استرداد رأس المال المنفصل.</p>
+          <Button icon="check" onClick={saveCap}>حفظ</Button>
         </Card>
       </div>
+
+      <ListsManager db={db} />
 
       <Card title="البيانات والنسخ الاحتياطي">
         <p className="muted">{isRemote
@@ -127,5 +132,71 @@ export default function Settings() {
         </div>
       </Card>
     </>
+  );
+}
+
+// عدد مرات استخدام قيمة من قائمة — لمنع حذف قيمة مستخدمة
+function usageOf(db, list, key) {
+  if (list === 'jobTypes') return db.employees.filter((e) => e.role === key).length;
+  if (list === 'empDocs') return db.employees.filter((e) => e.docs?.[key]?.number || e.docs?.[key]?.expiry).length;
+  if (list === 'vehDocs') return db.vehicles.filter((v) => v.docs?.[key]?.number || v.docs?.[key]?.expiry).length;
+  if (list === 'maintTypes') return db.maintenance.filter((m) => m.type === key).length;
+  if (list === 'incidentKinds') return db.incidents.filter((i) => i.kind === key).length;
+  if (list === 'payMethods') return db.expenses.filter((e) => e.paymentMethod === key).length;
+  return 0;
+}
+
+function ListsManager({ db }) {
+  const [list, setList] = useState('jobTypes');
+  const [name, setName] = useState('');
+  const items = listOf(list, db);
+  const add = () => {
+    const clean = name.trim();
+    if (!clean) return;
+    if (items.some((i) => i.name === clean)) return alert('موجودة مسبقاً');
+    insert('lookups', { list, name: clean, meta: {} }, `إضافة «${clean}» إلى ${LISTS[list].label}`);
+    setName('');
+  };
+  return (
+    <Card title="القوائم (قابلة للإضافة)">
+      <Notice>هذه القوائم تظهر في نماذج الإدخال. يمكن الإضافة من هنا أو مباشرة من أي نموذج عبر خيار «+ إضافة جديد…». القيم الأساسية ثابتة لأن حسابات النظام تعتمد عليها.</Notice>
+      <div className="tabs">
+        {Object.entries(LISTS).map(([k, l]) => <button key={k} type="button" className={list === k ? 'active' : ''} onClick={() => setList(k)}>{l.label}</button>)}
+      </div>
+      {LISTS[list].hint && <p className="small muted">{LISTS[list].hint}</p>}
+      <div className="toolbar">
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} placeholder={`إضافة إلى ${LISTS[list].label}`} style={{ maxWidth: 300 }} />
+        <Button icon="plus" onClick={add}>إضافة</Button>
+      </div>
+      <table className="table compact">
+        <tbody>
+          {items.map((i) => {
+            const used = usageOf(db, list, i.key);
+            return (
+              <tr key={i.key}>
+                <td style={{ width: '40%' }}>{i.custom
+                  ? <input defaultValue={i.name} key={i.name} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== i.name && update('lookups', i.key, { name: e.target.value.trim() }, `إعادة تسمية «${i.name}» إلى «${e.target.value.trim()}»`)} />
+                  : i.name}</td>
+                <td>{i.custom ? <Badge tone="navy">مضافة</Badge> : <Badge tone="gray">أساسية</Badge>}</td>
+                {list === 'jobTypes' && (
+                  <td>
+                    <label className="check">
+                      <input type="checkbox" checked={!!i.meta?.shipments} disabled={!i.custom}
+                        onChange={(e) => update('lookups', i.key, { meta: { ...i.meta, shipments: e.target.checked } }, `${e.target.checked ? 'تفعيل' : 'إلغاء'} تسليم الشحنات لفئة «${i.name}»`)} />
+                      <span className="small">يسلّم شحنات ويستحق الحافز</span>
+                    </label>
+                  </td>
+                )}
+                <td className="small muted">{used ? `مستخدمة في ${used} سجل` : ''}</td>
+                <td>{i.custom && <IconButton icon="trash" tone="red" title="حذف" onClick={() => {
+                  if (used) return alert('القيمة مستخدمة في سجلات ولا يمكن حذفها. يمكنك إعادة تسميتها.');
+                  if (window.confirm(`حذف «${i.name}»؟`)) remove('lookups', i.key, `حذف «${i.name}» من ${LISTS[list].label}`);
+                }} />}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Card>
   );
 }

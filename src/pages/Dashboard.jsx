@@ -7,6 +7,7 @@ import {
 import { thisMonth, monthLabel, money, fmtInt, fmtDate, today } from '../lib/format';
 import { VEH_STATUS } from '../lib/constants';
 import { seesMoney } from '../lib/permissions';
+import { isDriver } from '../lib/lookups';
 
 export default function Dashboard() {
   const db = useDb();
@@ -15,7 +16,7 @@ export default function Dashboard() {
   const money_ = seesMoney(role);
 
   const emps = db.employees.filter((e) => e.status !== 'terminated');
-  const drivers = emps.filter((e) => e.role === 'driver');
+  const drivers = emps.filter((e) => isDriver(e));
   const vehicles = db.vehicles.filter((v) => v.status !== 'sold');
   const counts = shipmentsByEmployee(db, M);
   const monthShipments = Object.values(counts).reduce((s, n) => s + n, 0);
@@ -46,9 +47,9 @@ export default function Dashboard() {
           <Stat icon="wallet" label="رواتب الشهر" value={money(pay.total)} hint={pay.approved ? 'معتمدة' : 'تقديرية حتى الاعتماد'} />
           <Stat icon="receipt" tone="red" label="مصروفات الشهر" value={money(profit.expenses)} hint="شاملة الرواتب" />
           {lastClosed
-            ? <Stat icon="coins" tone={lastClosed.net >= 0 ? 'green' : 'red'} label={`صافي ربح ${monthLabel(lastClosed.month)}`} value={money(lastClosed.net)} hint={`آخر شهر مُقفل · بعد مخصص هالك ${money(lastClosed.provision)}`} />
-            : <Stat icon="coins" tone={profit.net >= 0 ? 'green' : 'red'} label="صافي الربح (حتى الآن)" value={money(profit.net)} hint={`بعد مخصص هالك ${money(profit.provision)}`} />}
-          <Stat icon="lock" tone="teal" label="رصيد حساب مخصص الهالك" value={money(reserveBalance(db))} hint="حساب منفصل" />
+            ? <Stat icon="coins" tone={lastClosed.net >= 0 ? 'green' : 'red'} label={`صافي ربح ${monthLabel(lastClosed.month)}`} value={money(lastClosed.net)} hint={`آخر شهر مُقفل · بعد استقطاع رأس المال ${money(lastClosed.provision)}`} />
+            : <Stat icon="coins" tone={profit.net >= 0 ? 'green' : 'red'} label="صافي الربح (حتى الآن)" value={money(profit.net)} hint={`بعد استقطاع رأس المال ${money(profit.provision)}`} />}
+          <Stat icon="lock" tone="teal" label="رصيد حساب استرداد رأس المال" value={money(reserveBalance(db))} hint="حساب منفصل" />
         </>}
       </div>
 

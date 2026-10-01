@@ -6,8 +6,8 @@ import {
 } from '../components/ui';
 import { payrollFor, computePayroll, incentiveRuleFor, isClosed } from '../lib/calc';
 import { thisMonth, monthLabel, money, fmtInt, round2, fmtDate } from '../lib/format';
-import { JOBS } from '../lib/constants';
 import { downloadCSV, printPage } from '../lib/export';
+import { labelOf, rowIsDriver } from '../lib/lookups';
 
 export default function Payroll() {
   const db = useDb();
@@ -17,7 +17,7 @@ export default function Payroll() {
   const rule = incentiveRuleFor(db, month);
   const closed = isClosed(db, month);
   const sum = (k) => round2(pay.rows.reduce((s, r) => s + Number(r[k] || 0), 0));
-  const driversOver = pay.rows.filter((r) => r.role === 'driver' && r.extra > 0).length;
+  const driversOver = pay.rows.filter((r) => rowIsDriver(r) && r.extra > 0).length;
 
   const approve = () => {
     if (!window.confirm(`اعتماد مسيّر رواتب ${monthLabel(month)} بإجمالي ${money(pay.total)}؟\nبعد الاعتماد تُثبَّت الأرقام ولا تتأثر بأي تعديل لاحق على الإعدادات.`)) return;
@@ -33,7 +33,7 @@ export default function Payroll() {
 
   const exportCsv = () => downloadCSV(`مسير-الرواتب-${month}`,
     ['الموظف', 'الفئة', 'الراتب الأساسي', 'البدلات', 'الشحنات', 'الحد', 'الإضافية', 'قيمة الشحنة', 'الحافز', 'إضافات', 'خصومات', 'الصافي', 'الآيبان'],
-    pay.rows.map((r) => [r.name, JOBS[r.role], r.base, r.allowances, r.role === 'driver' ? r.shipments : '', r.role === 'driver' ? r.threshold : '', r.role === 'driver' ? r.extra : '', r.role === 'driver' ? r.rate : '', r.incentive, r.additions, r.deductions, r.net,
+    pay.rows.map((r) => [r.name, labelOf('jobTypes', r.role), r.base, r.allowances, rowIsDriver(r) ? r.shipments : '', rowIsDriver(r) ? r.threshold : '', rowIsDriver(r) ? r.extra : '', rowIsDriver(r) ? r.rate : '', r.incentive, r.additions, r.deductions, r.net,
       db.employees.find((e) => e.id === r.employeeId)?.iban || '']));
 
   return (
@@ -74,11 +74,11 @@ export default function Payroll() {
               <tbody>
                 {pay.rows.map((r) => (
                   <tr key={r.employeeId}>
-                    <td><Link to={`/employees/${r.employeeId}`}>{r.name}</Link><div className="sub">{JOBS[r.role]}</div></td>
+                    <td><Link to={`/employees/${r.employeeId}`}>{r.name}</Link><div className="sub">{labelOf('jobTypes', r.role)}</div></td>
                     <td className="money num">{fmtInt(r.base)}</td>
                     <td className="money num">{fmtInt(r.allowances)}</td>
-                    <td>{r.role === 'driver' ? <span className="num strong">{fmtInt(r.shipments)}</span> : '—'}</td>
-                    <td>{r.role === 'driver' ? (r.extra > 0 ? <Badge tone="teal">{fmtInt(r.extra)} × {r.rate}</Badge> : <span className="small muted">تحت {fmtInt(r.threshold)}</span>) : '—'}{r.custom && <div className="sub">حافز خاص</div>}</td>
+                    <td>{rowIsDriver(r) ? <span className="num strong">{fmtInt(r.shipments)}</span> : '—'}</td>
+                    <td>{rowIsDriver(r) ? (r.extra > 0 ? <Badge tone="teal">{fmtInt(r.extra)} × {r.rate}</Badge> : <span className="small muted">تحت {fmtInt(r.threshold)}</span>) : '—'}{r.custom && <div className="sub">حافز خاص</div>}</td>
                     <td className="money num">{r.incentive ? money(r.incentive) : '—'}</td>
                     <td className="money num text-green">{r.additions ? fmtInt(r.additions) : '—'}</td>
                     <td className="money num text-red">{r.deductions ? fmtInt(r.deductions) : '—'}</td>

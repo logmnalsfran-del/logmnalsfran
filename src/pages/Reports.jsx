@@ -1,23 +1,26 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDb, useSession } from '../lib/db';
-import { PageHeader, Card, Button, Tabs, MonthSelect, Badge, Bar, ExpiryBadge } from '../components/ui';
+import { PageHeader, Card, Button, Tabs, MonthSelect, Badge, Bar, ExpiryBadge, SearchBox } from '../components/ui';
 import {
   shipmentsByEmployee, ruleForEmployee, payrollFor, employedInMonth, monthSeries, expensesByCategory, profitFor, vehicleCosts,
+  currentCustody, custodyOfEmployee,
 } from '../lib/calc';
-import { thisMonth, monthLabel, money, fmtInt, round2, monthOf, MONTHS_AR, daysUntil } from '../lib/format';
-import { EMP_DOCS, VEH_DOCS } from '../lib/constants';
+import { thisMonth, monthLabel, money, fmtInt, round2, monthOf, MONTHS_AR, daysUntil, fmtDate } from '../lib/format';
+import { EMP_STATUS, VEH_STATUS } from '../lib/constants';
 import { seesMoney } from '../lib/permissions';
 import { downloadCSV, printPage } from '../lib/export';
+import { entriesOf, isDriver, labelOf, listOf } from '../lib/lookups';
 
 export default function Reports() {
   const { role } = useSession();
   const money_ = seesMoney(role);
-  const [tab, setTab] = useState('shipments');
+  const staff = role !== 'maintenance'; // مسؤول الصيانة يرى تقارير السيارات والوثائق فقط
+  const [tab, setTab] = useState(staff ? 'employees' : 'vehicles');
   const tabs = [
-    { key: 'shipments', label: 'الشحنات والحوافز' },
-    { key: 'trend', label: 'أداء المناديب (6 أشهر)' },
-    ...(money_ ? [{ key: 'vehicles', label: 'تكاليف السيارات' }, { key: 'expenses', label: 'المصروفات حسب الفئة' }, { key: 'profit', label: 'الأرباح الشهرية' }] : []),
+    ...(staff ? [{ key: 'employees', label: 'العمالة' }, { key: 'shipments', label: 'الشحنات والحوافز' }, { key: 'trend', label: 'أداء المناديب (6 أشهر)' }] : []),
+    { key: 'vehicles', label: 'السيارات والتكاليف' },
+    ...(money_ ? [{ key: 'expenses', label: 'المصروفات حسب الفئة' }, { key: 'profit', label: 'الأرباح الشهرية' }] : []),
     { key: 'docs', label: 'الوثائق وتواريخ الانتهاء' },
   ];
   return (
@@ -26,9 +29,10 @@ export default function Reports() {
         <Button variant="ghost" icon="printer" onClick={printPage}>طباعة / PDF</Button>
       </PageHeader>
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
+      {tab === 'employees' && <EmployeesReport money_={money_} />}
       {tab === 'shipments' && <ShipmentsReport money_={money_} />}
       {tab === 'trend' && <TrendReport />}
-      {tab === 'vehicles' && <VehicleReport />}
+      {tab === 'vehicles' && <VehicleReport money_={money_} />}
       {tab === 'expenses' && <ExpenseReport />}
       {tab === 'profit' && <ProfitReport />}
       {tab === 'docs' && <DocsReport />}
@@ -41,19 +45,27 @@ function ShipmentsReport({ money_ }) {
   const [month, setMonth] = useState(thisMonth());
   const counts = shipmentsByEmployee(db, month);
   const pay = money_ ? payrollFor(db, month) : null;
-  const drivers = db.employees.filter((e) => e.role === 'driver' && employedInMonth(e, month));
+  const [q, setQ] = useState('');
+  const [only, setOnly] = useState('all');
+  const drivers = db.employees.filter((e) => isDriver(e) && employedInMonth(e, month) && (!q || e.name.includes(q)));
   const rows = drivers.map((e) => {
     const n = counts[e.id] || 0;
     const r = ruleForEmployee(db, e, month);
     const days = new Set(db.shipments.filter((s) => s.employeeId === e.id && monthOf(s.date) === month && s.count > 0).map((s) => s.date)).size;
     const pr = pay?.rows.find((x) => x.employeeId === e.id);
     return { e, n, r, days, avg: days ? n / days : 0, extra: Math.max(0, n - r.threshold), incentive: pr?.incentive || 0 };
-  }).sort((a, b) => b.n - a.n);
+  }).filter((r) => only === 'all' || (only === 'over' ? r.extra > 0 : r.extra === 0)).sort((a, b) => b.n - a.n);
   const max = Math.max(1, ...rows.map((r) => r.n));
   const exportCsv = () => downloadCSV(`تقرير-الشحنات-${month}`, ['المندوب', 'أيام العمل', 'الشحنات', 'متوسط يومي', 'الحد', 'الإضافية', ...(money_ ? ['الحافز'] : [])],
     rows.map((r) => [r.e.name, r.days, r.n, round2(r.avg), r.r.threshold, r.extra, ...(money_ ? [r.incentive] : [])]));
   return (
     <Card flush title={`الشحنات والحوافز — ${monthLabel(month)}`} actions={<><MonthSelect value={month} onChange={setMonth} /><Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button></>}>
+      <div className="toolbar no-print" style={{ padding: '12px 20px 0' }}>
+        <SearchBox value={q} onChange={setQ} placeholder="بحث باسم المندوب" />
+        <select value={only} onChange={(e) => setOnly(e.target.value)} aria-label="الحد">
+          <option value="all">الكل</option><option value="over">تجاوزوا الحد</option><option value="under">لم يتجاوزوا الحد</option>
+        </select>
+      </div>
       <div className="table-wrap">
         <table className="table">
           <thead><tr><th>#</th><th>المندوب</th><th>أيام العمل</th><th>الشحنات</th><th style={{ width: '22%' }} /><th>متوسط يومي</th><th>الإضافية</th>{money_ && <th className="money">الحافز</th>}</tr></thead>
@@ -78,7 +90,7 @@ function TrendReport() {
   const db = useDb();
   const months = monthSeries(6, thisMonth());
   const byMonth = Object.fromEntries(months.map((m) => [m, shipmentsByEmployee(db, m)]));
-  const drivers = db.employees.filter((e) => e.role === 'driver' && e.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const drivers = db.employees.filter((e) => isDriver(e) && e.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   const exportCsv = () => downloadCSV('أداء-المناديب-6-أشهر', ['المندوب', ...months.map(monthLabel), 'المتوسط'],
     drivers.map((e) => { const vals = months.map((m) => byMonth[m][e.id] || 0); return [e.name, ...vals, Math.round(vals.reduce((s, n) => s + n, 0) / months.length)]; }));
   return (
@@ -106,28 +118,118 @@ function TrendReport() {
   );
 }
 
-function VehicleReport() {
+function VehicleReport({ money_ }) {
   const db = useDb();
-  const rows = db.vehicles.map((v) => ({ v, c: vehicleCosts(db, v) })).sort((a, b) => b.c.running - a.c.running);
+  const [f, setF] = useState({ status: 'fleet', make: '', driver: '', from: '', to: '', q: '' });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
+  const range = f.from || f.to ? { from: f.from, to: f.to } : null;
+  const makes = [...new Set(db.vehicles.map((v) => v.make).filter(Boolean))].sort();
+  const driverOf = (v) => { const c = currentCustody(db, v.id); return c ? db.employees.find((e) => e.id === c.employeeId) : null; };
+  const rows = db.vehicles
+    .filter((v) => (f.status === 'fleet' ? v.status !== 'sold' : f.status === 'all' ? true : v.status === f.status))
+    .filter((v) => !f.make || v.make === f.make)
+    .filter((v) => !f.driver || (f.driver === 'none' ? !driverOf(v) : driverOf(v)?.id === f.driver))
+    .filter((v) => !f.q || [v.plate, v.model, v.vin].some((x) => String(x || '').includes(f.q)))
+    .map((v) => ({ v, c: vehicleCosts(db, v, range), d: driverOf(v) }))
+    .sort((a, b) => b.c.running - a.c.running);
   const max = Math.max(1, ...rows.map((r) => r.c.running));
-  const exportCsv = () => downloadCSV('تكاليف-السيارات', ['اللوحة', 'السيارة', 'سعر الشراء', 'الصيانة', 'الوقود', 'الحوادث', 'أخرى', 'تكاليف التشغيل', 'الإجمالي'],
-    rows.map(({ v, c }) => [v.plate, `${v.make} ${v.model}`, c.purchase, c.maintenance, c.fuel, c.incidents, c.other, c.running, c.total]));
+  const period = range ? `${f.from ? monthLabel(f.from) : 'البداية'} — ${f.to ? monthLabel(f.to) : 'الآن'}` : 'منذ الشراء';
+  const sum = (k) => rows.reduce((s, r) => s + r.c[k], 0);
+  const exportCsv = () => downloadCSV('تقرير-السيارات', ['اللوحة', 'السيارة', 'السنة', 'الحالة', 'المندوب', 'العداد', ...(money_ ? ['سعر الشراء'] : []), 'الصيانة', 'الوقود', 'الحوادث', 'أخرى', 'تكاليف التشغيل', 'الفترة'],
+    rows.map(({ v, c, d }) => [v.plate, `${v.make} ${v.model}`, v.year, VEH_STATUS[v.status].label, d?.name || '', v.odometer, ...(money_ ? [c.purchase] : []), c.maintenance, c.fuel, c.incidents, c.other, c.running, period]));
   return (
-    <Card flush title="تكاليف السيارات منذ الشراء (الأعلى تشغيلاً أولاً)" actions={<Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button>}>
+    <Card flush title={`السيارات وتكاليف التشغيل — ${period}`} actions={<Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button>}>
+      <div className="toolbar no-print" style={{ padding: '12px 20px 0' }}>
+        <SearchBox value={f.q} onChange={set('q')} placeholder="بحث باللوحة أو الموديل" />
+        <select value={f.status} onChange={set('status')} aria-label="الحالة">
+          <option value="fleet">الأسطول الحالي</option><option value="all">الكل</option>
+          {Object.entries(VEH_STATUS).map(([k, x]) => <option key={k} value={k}>{x.label}</option>)}
+        </select>
+        <select value={f.make} onChange={set('make')} aria-label="الماركة">
+          <option value="">كل الماركات</option>{makes.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={f.driver} onChange={set('driver')} aria-label="المندوب">
+          <option value="">كل المناديب</option><option value="none">بدون عهدة</option>
+          {db.employees.filter((e) => isDriver(e)).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </select>
+        <label className="small muted">من <input type="month" value={f.from} onChange={set('from')} style={{ width: 150 }} /></label>
+        <label className="small muted">إلى <input type="month" value={f.to} onChange={set('to')} style={{ width: 150 }} /></label>
+        {(range || f.make || f.driver || f.q || f.status !== 'fleet') && <button type="button" className="btn-link" onClick={() => setF({ status: 'fleet', make: '', driver: '', from: '', to: '', q: '' })}>مسح الفلاتر</button>}
+      </div>
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>السيارة</th><th className="money">الشراء</th><th className="money">الصيانة</th><th className="money">الوقود</th><th className="money">الحوادث</th><th className="money">تكاليف التشغيل</th><th style={{ width: '14%' }} /><th className="money">الإجمالي</th></tr></thead>
+          <thead><tr><th>السيارة</th><th>الحالة</th><th>المندوب</th>{money_ && <th className="money">الشراء</th>}<th className="money">الصيانة</th><th className="money">الوقود</th><th className="money">الحوادث</th><th className="money">تكاليف التشغيل</th><th style={{ width: '12%' }} /></tr></thead>
           <tbody>
-            {rows.map(({ v, c }) => (
+            {rows.map(({ v, c, d }) => (
               <tr key={v.id}>
-                <td><Link to={`/vehicles/${v.id}`}>{v.plate}</Link><div className="sub">{v.make} {v.model}</div></td>
-                <td className="money num">{money(c.purchase)}</td><td className="money num">{money(c.maintenance)}</td><td className="money num">{money(c.fuel)}</td>
+                <td><Link to={`/vehicles/${v.id}`}>{v.plate}</Link><div className="sub">{v.make} {v.model} · {v.year}</div></td>
+                <td><Badge tone={VEH_STATUS[v.status].tone}>{VEH_STATUS[v.status].label}</Badge></td>
+                <td>{d?.name || <span className="muted">—</span>}</td>
+                {money_ && <td className="money num">{money(c.purchase)}</td>}
+                <td className="money num">{money(c.maintenance)}</td><td className="money num">{money(c.fuel)}</td>
                 <td className="money num">{money(c.incidents)}</td><td className="money num strong">{money(c.running)}</td>
-                <td><Bar value={c.running} max={max} tone="orange" /></td><td className="money num">{money(c.total)}</td>
+                <td><Bar value={c.running} max={max} tone="orange" /></td>
               </tr>
             ))}
           </tbody>
-          <tfoot><tr><td>الإجمالي</td>{['purchase', 'maintenance', 'fuel', 'incidents', 'running'].map((k) => <td key={k} className="money num">{money(rows.reduce((s, r) => s + r.c[k], 0))}</td>)}<td /><td className="money num">{money(rows.reduce((s, r) => s + r.c.total, 0))}</td></tr></tfoot>
+          <tfoot><tr><td colSpan={3}>الإجمالي ({rows.length} سيارة)</td>{money_ && <td className="money num">{money(sum('purchase'))}</td>}<td className="money num">{money(sum('maintenance'))}</td><td className="money num">{money(sum('fuel'))}</td><td className="money num">{money(sum('incidents'))}</td><td className="money num">{money(sum('running'))}</td><td /></tr></tfoot>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function EmployeesReport({ money_ }) {
+  const db = useDb();
+  const [f, setF] = useState({ type: '', status: 'current', nationality: '', q: '', month: thisMonth() });
+  const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
+  const nationalities = [...new Set(db.employees.map((e) => e.nationality).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
+  const counts = shipmentsByEmployee(db, f.month);
+  const pay = money_ ? payrollFor(db, f.month) : null;
+  const rows = db.employees
+    .filter((e) => !f.type || e.role === f.type)
+    .filter((e) => (f.status === 'current' ? e.status !== 'terminated' : f.status === 'all' ? true : e.status === f.status))
+    .filter((e) => !f.nationality || e.nationality === f.nationality)
+    .filter((e) => !f.q || [e.name, e.nationalId, e.phone].some((x) => String(x || '').includes(f.q)))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+    .map((e) => {
+      const c = custodyOfEmployee(db, e.id);
+      return { e, plate: c ? db.vehicles.find((v) => v.id === c.vehicleId)?.plate : '', shipments: counts[e.id] || 0, net: pay?.rows.find((r) => r.employeeId === e.id)?.net };
+    });
+  const exportCsv = () => downloadCSV(`تقرير-العمالة-${f.month}`, ['الاسم', 'نوع العمالة', 'المسمى', 'الجنسية', 'الهوية/الإقامة', 'الجوال', 'تاريخ التعيين', 'الحالة', 'السيارة', `شحنات ${f.month}`, ...(money_ ? ['الراتب الأساسي', 'البدلات', `صافي راتب ${f.month}`] : [])],
+    rows.map(({ e, plate, shipments, net }) => [e.name, labelOf('jobTypes', e.role), e.title, e.nationality, e.nationalId, e.phone, e.hireDate, EMP_STATUS[e.status].label, plate, isDriver(e) ? shipments : '', ...(money_ ? [e.baseSalary, e.allowances, net ?? ''] : [])]));
+  return (
+    <Card flush title={`تقرير العمالة — ${rows.length} موظف`} actions={<><MonthSelect value={f.month} onChange={set('month')} /><Button variant="ghost" icon="download" onClick={exportCsv}>Excel</Button></>}>
+      <div className="toolbar no-print" style={{ padding: '12px 20px 0' }}>
+        <SearchBox value={f.q} onChange={set('q')} placeholder="بحث بالاسم أو الهوية أو الجوال" />
+        <select value={f.type} onChange={set('type')} aria-label="نوع العمالة">
+          <option value="">كل أنواع العمالة</option>{listOf('jobTypes', db).map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}
+        </select>
+        <select value={f.status} onChange={set('status')} aria-label="الحالة">
+          <option value="current">الحاليون</option><option value="all">الكل</option>
+          {Object.entries(EMP_STATUS).map(([k, x]) => <option key={k} value={k}>{x.label}</option>)}
+        </select>
+        <select value={f.nationality} onChange={set('nationality')} aria-label="الجنسية">
+          <option value="">كل الجنسيات</option>{nationalities.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        {(f.type || f.nationality || f.q || f.status !== 'current') && <button type="button" className="btn-link" onClick={() => setF({ ...f, type: '', status: 'current', nationality: '', q: '' })}>مسح الفلاتر</button>}
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>الاسم</th><th>نوع العمالة</th><th>الجنسية</th><th>تاريخ التعيين</th><th>السيارة</th><th>شحنات الشهر</th>{money_ && <><th className="money">الأساسي + البدلات</th><th className="money">صافي الشهر</th></>}<th>الحالة</th></tr></thead>
+          <tbody>
+            {rows.map(({ e, plate, shipments, net }) => (
+              <tr key={e.id}>
+                <td><Link to={`/employees/${e.id}`}>{e.name}</Link><div className="sub">{e.nationalId}</div></td>
+                <td>{labelOf('jobTypes', e.role)}{e.title && <div className="sub">{e.title}</div>}</td>
+                <td>{e.nationality || '—'}</td><td>{fmtDate(e.hireDate)}</td><td>{plate || '—'}</td>
+                <td className="num">{isDriver(e) ? fmtInt(shipments) : '—'}</td>
+                {money_ && <><td className="money num">{money(Number(e.baseSalary || 0) + Number(e.allowances || 0))}</td><td className="money num strong">{net !== undefined ? money(net) : '—'}</td></>}
+                <td><Badge tone={EMP_STATUS[e.status].tone}>{EMP_STATUS[e.status].label}</Badge></td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr><td colSpan={5}>الإجمالي</td><td className="num">{fmtInt(rows.reduce((s, r) => s + (isDriver(r.e) ? r.shipments : 0), 0))}</td>{money_ && <><td className="money num">{money(rows.reduce((s, r) => s + Number(r.e.baseSalary || 0) + Number(r.e.allowances || 0), 0))}</td><td className="money num">{money(rows.reduce((s, r) => s + (r.net || 0), 0))}</td></>}<td /></tr></tfoot>
         </table>
       </div>
     </Card>
@@ -165,7 +267,7 @@ function ProfitReport() {
   return (
     <Card title="الإيرادات والمصروفات وصافي الربح">
       <table className="table">
-        <thead><tr><th>الشهر</th><th style={{ width: '36%' }}>الإيرادات / المصروفات</th><th className="money">الربح التشغيلي</th><th className="money">مخصص الهالك</th><th className="money">صافي الربح</th></tr></thead>
+        <thead><tr><th>الشهر</th><th style={{ width: '36%' }}>الإيرادات / المصروفات</th><th className="money">الربح التشغيلي</th><th className="money">استرداد رأس المال</th><th className="money">صافي الربح</th></tr></thead>
         <tbody>
           {months.map((x) => (
             <tr key={x.m}>
@@ -190,8 +292,8 @@ function DocsReport() {
   const db = useDb();
   const [filter, setFilter] = useState('90');
   const rows = [
-    ...db.employees.filter((e) => e.status !== 'terminated').flatMap((e) => Object.entries(EMP_DOCS).map(([k, label]) => ({ owner: e.name, to: `/employees/${e.id}`, type: 'موظف', label, number: e.docs?.[k]?.number, expiry: e.docs?.[k]?.expiry }))),
-    ...db.vehicles.filter((v) => v.status !== 'sold').flatMap((v) => Object.entries(VEH_DOCS).map(([k, label]) => ({ owner: `سيارة ${v.plate}`, to: `/vehicles/${v.id}`, type: 'سيارة', label, number: v.docs?.[k]?.number, expiry: v.docs?.[k]?.expiry }))),
+    ...db.employees.filter((e) => e.status !== 'terminated').flatMap((e) => entriesOf('empDocs').map(([k, label]) => ({ owner: e.name, to: `/employees/${e.id}`, type: 'موظف', label, number: e.docs?.[k]?.number, expiry: e.docs?.[k]?.expiry }))),
+    ...db.vehicles.filter((v) => v.status !== 'sold').flatMap((v) => entriesOf('vehDocs').map(([k, label]) => ({ owner: `سيارة ${v.plate}`, to: `/vehicles/${v.id}`, type: 'سيارة', label, number: v.docs?.[k]?.number, expiry: v.docs?.[k]?.expiry }))),
   ].filter((r) => r.expiry && (filter === 'all' || daysUntil(r.expiry) <= Number(filter))).sort((a, b) => a.expiry.localeCompare(b.expiry));
   const exportCsv = () => downloadCSV('الوثائق', ['الجهة', 'النوع', 'الوثيقة', 'الرقم', 'تاريخ الانتهاء', 'الأيام المتبقية'], rows.map((r) => [r.owner, r.type, r.label, r.number, r.expiry, daysUntil(r.expiry)]));
   return (

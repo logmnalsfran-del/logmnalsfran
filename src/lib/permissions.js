@@ -9,7 +9,7 @@ const MATRIX = {
   payroll: { owner: 'edit' },
   expenses: { owner: 'edit' },
   finance: { owner: 'edit' },
-  reports: { owner: 'edit', supervisor: 'view' },
+  reports: { owner: 'edit', supervisor: 'view', maintenance: 'view' },
   settings: { owner: 'edit' },
   audit: { owner: 'view' },
   users: { owner: 'edit' },

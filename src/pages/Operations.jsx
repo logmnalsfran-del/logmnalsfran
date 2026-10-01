@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom';
 import { useDb, useSession, remove, update } from '../lib/db';
 import { PageHeader, Card, Button, Badge, Tabs, Empty, IconButton, MonthSelect, Stat } from '../components/ui';
 import { MaintenanceForm, FuelForm, IncidentForm, ScheduleForm } from '../components/OpsForms';
-import { MAINT_TYPES, INCIDENT_KINDS } from '../lib/constants';
 import { scheduleStatus, isClosed } from '../lib/calc';
 import { thisMonth, monthOf, money, fmtDate, fmtInt, today, round2 } from '../lib/format';
 import { canEdit } from '../lib/permissions';
 import { downloadCSV } from '../lib/export';
+import { labelOf } from '../lib/lookups';
 
 export default function Operations() {
   const db = useDb();
@@ -38,9 +38,9 @@ export default function Operations() {
   );
 
   const exportCsv = () => {
-    if (tab === 'maintenance') downloadCSV(`الصيانة-${month}`, ['التاريخ', 'السيارة', 'النوع', 'الوصف', 'الورشة', 'قطع الغيار', 'العداد', 'التكلفة'], maint.map((m) => [m.date, plate(m.vehicleId), MAINT_TYPES[m.type], m.description, m.workshop, m.parts, m.odometer, m.cost]));
+    if (tab === 'maintenance') downloadCSV(`الصيانة-${month}`, ['التاريخ', 'السيارة', 'النوع', 'الوصف', 'الورشة', 'قطع الغيار', 'العداد', 'التكلفة'], maint.map((m) => [m.date, plate(m.vehicleId), labelOf('maintTypes', m.type), m.description, m.workshop, m.parts, m.odometer, m.cost]));
     else if (tab === 'fuel') downloadCSV(`الوقود-${month}`, ['التاريخ', 'السيارة', 'اللترات', 'العداد', 'التكلفة'], fuel.map((f) => [f.date, plate(f.vehicleId), f.liters, f.odometer, f.cost]));
-    else if (tab === 'incidents') downloadCSV(`الحوادث-${month}`, ['التاريخ', 'السيارة', 'النوع', 'السائق', 'الوصف', 'التكلفة'], inc.map((i) => [i.date, plate(i.vehicleId), INCIDENT_KINDS[i.kind], db.employees.find((e) => e.id === i.employeeId)?.name, i.description, i.cost]));
+    else if (tab === 'incidents') downloadCSV(`الحوادث-${month}`, ['التاريخ', 'السيارة', 'النوع', 'السائق', 'الوصف', 'التكلفة'], inc.map((i) => [i.date, plate(i.vehicleId), labelOf('incidentKinds', i.kind), db.employees.find((e) => e.id === i.employeeId)?.name, i.description, i.cost]));
     else downloadCSV('الصيانة-المجدولة', ['السيارة', 'الصيانة', 'العداد الحالي', 'الاستحقاق (كم)', 'المتبقي (كم)', 'تاريخ الاستحقاق'], sched.map((s) => [s.plate, s.name, s.odometer, s.nextKm, s.kmLeft, s.dueDate]));
   };
 
@@ -106,7 +106,7 @@ export default function Operations() {
                 {maint.map((m) => (
                   <tr key={m.id}>
                     <td>{fmtDate(m.date)}</td><td><Link to={`/vehicles/${m.vehicleId}`}>{plate(m.vehicleId)}</Link></td>
-                    <td><Badge tone={m.type === 'emergency' ? 'orange' : 'navy'}>{MAINT_TYPES[m.type]}</Badge></td>
+                    <td><Badge tone={m.type === 'emergency' ? 'orange' : 'navy'}>{labelOf('maintTypes', m.type)}</Badge></td>
                     <td>{m.description}{m.parts && <div className="sub">{m.parts}</div>}</td><td>{m.workshop}</td>
                     <td className="money num">{money(m.cost)}</td>{actions('maintenance', 'maint', m, 'سجل الصيانة')}
                   </tr>
@@ -139,7 +139,7 @@ export default function Operations() {
                 {inc.map((i) => (
                   <tr key={i.id}>
                     <td>{fmtDate(i.date)}</td><td><Link to={`/vehicles/${i.vehicleId}`}>{plate(i.vehicleId)}</Link></td>
-                    <td><Badge tone={i.kind === 'accident' ? 'red' : 'orange'}>{INCIDENT_KINDS[i.kind]}</Badge></td>
+                    <td><Badge tone={i.kind === 'accident' ? 'red' : 'orange'}>{labelOf('incidentKinds', i.kind)}</Badge></td>
                     <td>{db.employees.find((e) => e.id === i.employeeId)?.name || '—'}</td><td>{i.description}</td>
                     <td className="money num">{money(i.cost)}</td>{actions('incidents', 'inc', i, 'السجل')}
                   </tr>

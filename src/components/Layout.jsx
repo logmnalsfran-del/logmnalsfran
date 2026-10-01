@@ -19,7 +19,7 @@ const NAV = [
   { to: '/payroll', page: 'payroll', label: 'مسيّر الرواتب', icon: 'wallet' },
   { group: 'المالية' },
   { to: '/expenses', page: 'expenses', label: 'المصروفات الشهرية', icon: 'receipt' },
-  { to: '/finance', page: 'finance', label: 'الأرباح ومخصص الهالك', icon: 'coins' },
+  { to: '/finance', page: 'finance', label: 'الأرباح واسترداد رأس المال', icon: 'coins' },
   { to: '/reports', page: 'reports', label: 'التقارير', icon: 'chart' },
   { group: 'النظام' },
   { to: '/users', page: 'users', label: 'المستخدمون', icon: 'lock' },

@@ -1,7 +1,9 @@
 import { Modal, Field, FormGrid, FormSection, Button, useForm } from './ui';
 import { insert, update } from '../lib/db';
-import { JOBS, EMP_STATUS, EMP_DOCS } from '../lib/constants';
+import { EMP_STATUS } from '../lib/constants';
 import { today } from '../lib/format';
+import { entriesOf, isDriver } from '../lib/lookups';
+import { LookupField, SuggestField } from './Lookup';
 
 const blank = {
   name: '', role: 'driver', title: 'مندوب توصيل', nationalId: '', nationality: '', phone: '', birthDate: '',
@@ -21,7 +23,7 @@ export default function EmployeeForm({ employee, onClose, showMoney }) {
       ...v,
       baseSalary: Number(v.baseSalary) || 0,
       allowances: Number(v.allowances) || 0,
-      incentiveOverride: v.role === 'driver' && v.incentiveOverride.enabled
+      incentiveOverride: isDriver(v) && v.incentiveOverride.enabled
         ? { enabled: true, threshold: Number(v.incentiveOverride.threshold), rate: Number(v.incentiveOverride.rate) }
         : null,
     };
@@ -36,16 +38,16 @@ export default function EmployeeForm({ employee, onClose, showMoney }) {
       <FormSection title="البيانات الأساسية">
         <FormGrid>
           <Field label="الاسم الكامل *" {...bind('name')} span={2} />
-          <Field label="الفئة" as="select" options={Object.entries(JOBS).map(([value, label]) => ({ value, label }))} {...bind('role')} />
-          <Field label="المسمى الوظيفي" {...bind('title')} />
+          <LookupField label="نوع العمالة" list="jobTypes" {...bind('role')} />
+          <SuggestField label="المسمى الوظيفي" col="employees" field="title" {...bind('title')} />
           <Field label="رقم الهوية / الإقامة" {...bind('nationalId')} />
-          <Field label="الجنسية" {...bind('nationality')} />
+          <SuggestField label="الجنسية" col="employees" field="nationality" {...bind('nationality')} />
           <Field label="الجوال" type="tel" {...bind('phone')} />
           <Field label="تاريخ الميلاد" type="date" {...bind('birthDate')} />
           <Field label="تاريخ التعيين" type="date" {...bind('hireDate')} />
           <Field label="الحالة" as="select" options={Object.entries(EMP_STATUS).map(([value, s]) => ({ value, label: s.label }))} {...bind('status')} />
           {v.status === 'terminated' && <Field label="تاريخ انتهاء الخدمة" type="date" {...bind('terminationDate')} />}
-          {v.role === 'driver' && <Field label="رقم المندوب في تطبيق الشركة الرئيسية" {...bind('externalId')} />}
+          {isDriver(v) && <Field label="رقم المندوب في تطبيق الشركة الرئيسية" {...bind('externalId')} />}
         </FormGrid>
       </FormSection>
 
@@ -56,7 +58,7 @@ export default function EmployeeForm({ employee, onClose, showMoney }) {
             <Field label="البدلات الشهرية (ر.س)" type="number" min="0" {...bind('allowances')} />
             <Field label="الآيبان" {...bind('iban')} />
           </FormGrid>
-          {v.role === 'driver' && (
+          {isDriver(v) && (
             <div style={{ marginTop: 14 }}>
               <label className="check"><input type="checkbox" {...bind('incentiveOverride.enabled')} checked={!!v.incentiveOverride.enabled} /> حافز خاص بهذا المندوب (بدلاً من الإعداد العام)</label>
               {v.incentiveOverride.enabled && (
@@ -72,7 +74,7 @@ export default function EmployeeForm({ employee, onClose, showMoney }) {
 
       <FormSection title="الوثائق">
         <FormGrid cols={2}>
-          {Object.entries(EMP_DOCS).map(([k, label]) => (
+          {entriesOf('empDocs').map(([k, label]) => (
             <div key={k} className="form-grid cols-2" style={{ gap: 8 }}>
               <Field label={`${label} — الرقم`} {...bind(`docs.${k}.number`)} />
               <Field label="تاريخ الانتهاء" type="date" {...bind(`docs.${k}.expiry`)} />

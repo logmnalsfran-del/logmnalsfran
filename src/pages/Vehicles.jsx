@@ -3,14 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { useDb, useSession } from '../lib/db';
 import { PageHeader, Card, Button, Badge, ExpiryBadge, SearchBox, Tabs, Empty } from '../components/ui';
 import VehicleForm from '../components/VehicleForm';
-import { VEH_STATUS, VEH_DOCS } from '../lib/constants';
+import { VEH_STATUS } from '../lib/constants';
 import { currentCustody, vehicleCosts } from '../lib/calc';
 import { money, fmtInt } from '../lib/format';
 import { canEdit, seesMoney } from '../lib/permissions';
 import { downloadCSV } from '../lib/export';
+import { entriesOf } from '../lib/lookups';
 
 function nearestDoc(v) {
-  return Object.entries(VEH_DOCS)
+  return entriesOf('vehDocs')
     .map(([k, label]) => ({ label, expiry: v.docs?.[k]?.expiry }))
     .filter((d) => d.expiry)
     .sort((a, b) => a.expiry.localeCompare(b.expiry))[0];

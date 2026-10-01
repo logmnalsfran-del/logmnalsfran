@@ -17,13 +17,13 @@ const SESSION_KEY = 'logistics-app:session';
 export const COLLECTIONS = [
   'employees', 'vehicles', 'custody', 'maintenance', 'schedules', 'fuel', 'incidents',
   'shipments', 'adjustments', 'payrollRuns', 'expenseCategories', 'expenses', 'recurring',
-  'revenues', 'reserve', 'closedMonths', 'audit',
+  'revenues', 'reserve', 'closedMonths', 'audit', 'lookups',
 ];
 const COMP_FIELDS = ['baseSalary', 'allowances', 'iban', 'incentiveOverride'];
 
 function emptyState() {
   const s = Object.fromEntries(COLLECTIONS.map((c) => [c, []]));
-  s.settings = { companyName: 'الشركة اللوجستية', alertDays: 30, incentiveRules: [{ id: 'default', from: '2000-01', threshold: 1000, rate: 2 }], revenuePerShipment: 0, depreciation: { method: 'straight_line', fixedAmount: 0 } };
+  s.settings = { companyName: 'الشركة اللوجستية', alertDays: 30, incentiveRules: [{ id: 'default', from: '2000-01', threshold: 1000, rate: 2 }], revenuePerShipment: 0, defaultRecoveryPct: 0, capitalAmount: 0 };
   return s;
 }
 
@@ -247,7 +247,7 @@ export function exportBackup() {
 }
 
 // ترتيب الإدراج يراعي العلاقات؛ الأشهر المقفلة آخراً لأن القاعدة تمنع الإضافة في شهر مقفل
-const IMPORT_ORDER = ['employees', 'vehicles', 'custody', 'maintenance', 'schedules', 'fuel', 'incidents', 'shipments',
+const IMPORT_ORDER = ['lookups', 'employees', 'vehicles', 'custody', 'maintenance', 'schedules', 'fuel', 'incidents', 'shipments',
   'adjustments', 'payrollRuns', 'expenses', 'recurring', 'revenues', 'reserve', 'closedMonths'];
 const FK_FIELDS = ['employeeId', 'vehicleId', 'categoryId'];
 
@@ -278,11 +278,15 @@ export async function importBackup(json) {
   });
   if (catRows.length) await remoteInsertMany('expenseCategories', catRows);
 
+  const lookupIds = new Set(data.lookups.map((l) => l.id));
   for (const col of IMPORT_ORDER) {
     const rows = data[col].map((r) => {
       const { createdAt, ...rest } = r;
       const out = { ...rest, id: newId(r.id), ...(createdAt ? { createdAt } : {}) };
       FK_FIELDS.forEach((f) => { if (out[f]) out[f] = newId(out[f]); });
+      // القيم المضافة للقوائم المرنة تُخزَّن بمعرّف الصف، فنحدّثها إن كانت تشير لقيمة مستوردة
+      ['role', 'type', 'kind', 'paymentMethod'].forEach((f) => { if (lookupIds.has(out[f])) out[f] = newId(out[f]); });
+      if (out.docs) out.docs = Object.fromEntries(Object.entries(out.docs).map(([k, v]) => [lookupIds.has(k) ? newId(k) : k, v]));
       if (col === 'payrollRuns') out.rows = r.rows.map((x) => ({ ...x, employeeId: newId(x.employeeId) }));
       return out;
     });
@@ -291,7 +295,7 @@ export async function importBackup(json) {
   const s = data.settings;
   await remoteSettings({
     companyName: s.companyName, alertDays: s.alertDays, revenuePerShipment: s.revenuePerShipment || 0,
-    depreciation: s.depreciation || { method: 'straight_line', fixedAmount: 0 },
+    defaultRecoveryPct: s.defaultRecoveryPct || 0, capitalAmount: s.capitalAmount || 0,
     incentiveRules: (s.incentiveRules || []).map((r) => ({ ...r, id: uid() })),
   }, state.settings.incentiveRules.filter((r) => r.id !== 'default'));
   await remoteAudit(auditEntry('استيراد', 'البيانات', `استيراد ${data.employees.length} موظف و${data.vehicles.length} سيارة`), session?.userId);

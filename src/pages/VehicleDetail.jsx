@@ -6,12 +6,13 @@ import {
 } from '../components/ui';
 import VehicleForm from '../components/VehicleForm';
 import { MaintenanceForm, FuelForm, IncidentForm, ScheduleForm, HandoverForm, ReturnForm } from '../components/OpsForms';
-import { VEH_STATUS, VEH_DOCS, MAINT_TYPES, INCIDENT_KINDS } from '../lib/constants';
+import { VEH_STATUS } from '../lib/constants';
 import {
-  currentCustody, vehicleCosts, vehicleMonthlyDepreciation, accumulatedDepreciation, installmentsRemaining, scheduleStatus, isClosed,
+  currentCustody, vehicleCosts, installmentsRemaining, scheduleStatus, isClosed,
 } from '../lib/calc';
 import { money, fmtDate, fmtInt, thisMonth, today, monthOf, monthDiff, addMonths, monthLabel } from '../lib/format';
 import { canEdit, canCustody, seesMoney } from '../lib/permissions';
+import { entriesOf, labelOf } from '../lib/lookups';
 
 export default function VehicleDetail() {
   const { id } = useParams();
@@ -53,7 +54,7 @@ export default function VehicleDetail() {
     { key: 'schedules', label: 'الصيانة المجدولة', count: sched.length },
     { key: 'fuel', label: 'الوقود', count: fuel.length },
     { key: 'incidents', label: 'الحوادث والمخالفات', count: inc.length },
-    ...(showMoney ? [{ key: 'finance', label: 'التكاليف والإهلاك' }] : []),
+    ...(showMoney ? [{ key: 'finance', label: 'التكاليف والأقساط' }] : []),
   ];
 
   return (
@@ -89,7 +90,7 @@ export default function VehicleDetail() {
         <Card title="الوثائق">
           <table className="table compact">
             <tbody>
-              {Object.entries(VEH_DOCS).map(([k, label]) => (
+              {entriesOf('vehDocs').map(([k, label]) => (
                 <tr key={k}><td>{label}</td><td className="num">{v.docs?.[k]?.number || '—'}</td><td><ExpiryBadge date={v.docs?.[k]?.expiry} /></td></tr>
               ))}
             </tbody>
@@ -133,7 +134,7 @@ export default function VehicleDetail() {
               <tbody>
                 {maint.map((m) => (
                   <tr key={m.id}>
-                    <td>{fmtDate(m.date)}</td><td><Badge tone={m.type === 'emergency' ? 'orange' : 'navy'}>{MAINT_TYPES[m.type]}</Badge></td>
+                    <td>{fmtDate(m.date)}</td><td><Badge tone={m.type === 'emergency' ? 'orange' : 'navy'}>{labelOf('maintTypes', m.type)}</Badge></td>
                     <td>{m.description}{m.parts && <div className="sub">{m.parts}</div>}</td><td>{m.workshop}</td>
                     <td className="num">{fmtInt(m.odometer)}</td><td className="money num">{money(m.cost)}</td>
                     {opsEditable && <td><div className="actions"><IconButton icon="edit" title="تعديل" onClick={() => setModal({ type: 'maint', record: m })} /><IconButton icon="trash" tone="red" title="حذف" onClick={() => del('maintenance', m, 'سجل الصيانة')} /></div></td>}
@@ -196,7 +197,7 @@ export default function VehicleDetail() {
               <tbody>
                 {inc.map((i) => (
                   <tr key={i.id}>
-                    <td>{fmtDate(i.date)}</td><td><Badge tone={i.kind === 'accident' ? 'red' : 'orange'}>{INCIDENT_KINDS[i.kind]}</Badge></td>
+                    <td>{fmtDate(i.date)}</td><td><Badge tone={i.kind === 'accident' ? 'red' : 'orange'}>{labelOf('incidentKinds', i.kind)}</Badge></td>
                     <td>{empName(i.employeeId)}</td><td>{i.description}</td><td className="money num">{money(i.cost)}</td>
                     {opsEditable && <td><div className="actions"><IconButton icon="edit" title="تعديل" onClick={() => setModal({ type: 'inc', record: i })} /><IconButton icon="trash" tone="red" title="حذف" onClick={() => del('incidents', i, 'السجل')} /></div></td>}
                   </tr>
@@ -222,10 +223,6 @@ export default function VehicleDetail() {
 }
 
 function FinanceTab({ db, v, costs, M }) {
-  const monthly = vehicleMonthlyDepreciation(v);
-  const acc = accumulatedDepreciation(db, v, M);
-  const bookValue = Math.max(Number(v.residualValue) || 0, (Number(v.price) || 0) - acc);
-  const monthsDone = v.purchaseDate ? Math.min(Number(v.usefulLifeMonths), Math.max(0, monthDiff(monthOf(v.purchaseDate), M) + 1)) : 0;
   const remaining = installmentsRemaining(v, M);
   const paidCount = v.paymentMethod === 'installments' && v.installmentStart ? Math.min(v.installmentCount, Math.max(0, monthDiff(v.installmentStart, M) + 1)) : 0;
   return (
@@ -242,22 +239,15 @@ function FinanceTab({ db, v, costs, M }) {
         </tbody></table>
       </div>
       <div>
-        <h2 style={{ marginBottom: 10 }}>مخصص الهالك</h2>
-        <table className="statement"><tbody>
-          <tr><td>الإهلاك الشهري</td><td>{money(monthly)}</td></tr>
-          <tr className="sub"><td>العمر الإنتاجي</td><td>{v.usefulLifeMonths} شهر (مضى {monthsDone})</td></tr>
-          <tr className="sub"><td>القيمة المتبقية المتوقعة</td><td>{money(v.residualValue)}</td></tr>
-          <tr className="provision"><td>الإهلاك المتراكم حتى {monthLabel(M)}</td><td>{money(acc)}</td></tr>
-          <tr className="total"><td>القيمة الدفترية الحالية</td><td>{money(bookValue)}</td></tr>
-        </tbody></table>
         {v.paymentMethod === 'installments' && <>
-          <h2 style={{ margin: '18px 0 10px' }}>الأقساط</h2>
+          <h2 style={{ marginBottom: 10 }}>الأقساط</h2>
           <table className="statement"><tbody>
             <tr><td>القسط الشهري</td><td>{money(v.installmentAmount)}</td></tr>
             <tr className="sub"><td>المدفوع</td><td>{paidCount} من {v.installmentCount} (ينتهي {monthLabel(addMonths(v.installmentStart, v.installmentCount - 1))})</td></tr>
             <tr className="total"><td>المتبقي</td><td>{money(remaining)}</td></tr>
           </tbody></table>
         </>}
+        {v.paymentMethod !== 'installments' && <p className="muted">السيارة مشتراة نقداً. ثمن السيارات رأس مال يُسترد تدريجياً عبر «حساب استرداد رأس المال» في شاشة الأرباح.</p>}
       </div>
     </div>
   );
@@ -269,7 +259,7 @@ function DisposeForm({ v, cur, onClose }) {
     const price = Number(f.price) || 0;
     if (cur) update('custody', cur.id, { toDate: f.date, odometerIn: v.odometer, conditionIn: f.type === 'sold' ? 'بيعت' : 'شُطبت' });
     update('vehicles', v.id, { status: 'sold', disposal: { date: f.date, type: f.type, price } }, `${f.type === 'sold' ? 'بيع' : 'تشطيب'} السيارة ${v.plate}${price ? ` بـ ${price} ر.س` : ''}`);
-    if (price > 0) insert('revenues', { month: monthOf(f.date), date: f.date, amount: price, description: `بيع السيارة ${v.plate}`, source: 'بيع أصول' });
+    if (price > 0) insert('revenues', { month: monthOf(f.date), date: f.date, amount: price, description: `بيع السيارة ${v.plate}`, source: 'بيع أصول', recoveryPct: 0 });
     onClose();
   };
   return (
@@ -280,7 +270,7 @@ function DisposeForm({ v, cur, onClose }) {
         <Field label="النوع" as="select" options={[{ value: 'sold', label: 'بيع' }, { value: 'scrapped', label: 'تشليح / شطب' }]} {...bind('type')} />
         <Field label="المبلغ المحصّل (ر.س)" type="number" min="0" {...bind('price')} />
       </FormGrid>
-      <p className="muted small">سيتوقف احتساب مخصص الهالك لهذه السيارة بعد شهر الإخراج، وتُغلق العهدة الحالية، ويُسجَّل مبلغ البيع إيراداً في شهره.</p>
+      <p className="muted small">تُغلق العهدة الحالية، ويُسجَّل مبلغ البيع إيراداً في شهره (يمكن تحديد نسبة استرداد رأس المال منه من شاشة الأرباح).</p>
     </Modal>
   );
 }

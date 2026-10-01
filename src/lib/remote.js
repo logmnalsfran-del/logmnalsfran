@@ -19,6 +19,7 @@ export const TABLES = {
   reserve: 'reserve_transactions',
   closedMonths: 'closed_months',
   audit: 'audit_log',
+  lookups: 'lookups',
 };
 
 // حقول الموظف المالية تُحفظ في جدول employee_compensation (للمالك فقط)
@@ -78,6 +79,8 @@ async function fetchAll(table, order = 'created_at') {
     if (error) {
       // جداول غير مسموحة لهذا الدور تُعامل كفارغة
       if (/row-level security|permission denied/i.test(error.message)) return [];
+      // جدول لم يُنشأ بعد (ترحيل لم يُشغَّل): لا نعطّل التطبيق
+      if (error.code === 'PGRST205' || error.code === '42P01') return [];
       throw new Error(translateError(error));
     }
     out.push(...data);
@@ -112,7 +115,8 @@ export async function loadAll(role) {
     companyName: s?.company_name || 'الشركة اللوجستية',
     alertDays: s?.alert_days || 30,
     revenuePerShipment: Number(s?.revenue_per_shipment) || 0,
-    depreciation: { method: s?.depreciation_method || 'straight_line', fixedAmount: Number(s?.depreciation_fixed_amount) || 0 },
+    defaultRecoveryPct: Number(s?.default_recovery_pct) || 0,
+    capitalAmount: Number(s?.capital_amount) || 0,
     incentiveRules: rules.map((r) => ({ id: r.id, from: r.from_month, threshold: r.threshold, rate: Number(r.rate), note: r.note || '' })),
   };
   // الأرقام من نوع numeric تصل أرقاماً؛ نحوّل احتياطياً ما قد يصل نصاً
@@ -156,10 +160,8 @@ export async function remoteSettings(patch, rulesBefore) {
   if ('companyName' in patch) row.company_name = patch.companyName;
   if ('alertDays' in patch) row.alert_days = patch.alertDays;
   if ('revenuePerShipment' in patch) row.revenue_per_shipment = patch.revenuePerShipment;
-  if (patch.depreciation) {
-    row.depreciation_method = patch.depreciation.method;
-    row.depreciation_fixed_amount = patch.depreciation.fixedAmount;
-  }
+  if ('defaultRecoveryPct' in patch) row.default_recovery_pct = patch.defaultRecoveryPct;
+  if ('capitalAmount' in patch) row.capital_amount = patch.capitalAmount;
   if (Object.keys(row).length) check(await supabase.from('settings').update({ ...row, updated_at: new Date().toISOString() }).eq('id', 1));
   if (patch.incentiveRules) {
     const next = patch.incentiveRules;

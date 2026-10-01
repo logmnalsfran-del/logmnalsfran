@@ -4,18 +4,21 @@ import { useDb, useSession, replaceWhere } from '../lib/db';
 import { PageHeader, Card, Button, Badge, Tabs, MonthSelect, Stat, Bar, IconButton, Notice } from '../components/ui';
 import { shipmentsByEmployee, ruleForEmployee, isClosed, employedInMonth } from '../lib/calc';
 import {
-  today, thisMonth, monthOf, addDays, fmtDate, fmtInt, weekdayAr, daysInMonth, monthLabel,
+  today, thisMonth, monthOf, addDays, fmtDate, fmtInt, weekdayAr, daysInMonth, monthLabel, monthEnd,
 } from '../lib/format';
 import { canEdit } from '../lib/permissions';
 import { downloadCSV } from '../lib/export';
+import { isDriver } from '../lib/lookups';
 
 export default function Shipments() {
   const [tab, setTab] = useState('daily');
   return (
     <>
-      <PageHeader title="الشحنات اليومية" subtitle="إدخال عدد الشحنات التي سلّمها كل مندوب يومياً، وتُجمع تلقائياً لحساب الحافز الشهري" />
-      <Tabs active={tab} onChange={setTab} tabs={[{ key: 'daily', label: 'الإدخال اليومي' }, { key: 'matrix', label: 'الجدول الشهري' }]} />
-      {tab === 'daily' ? <Daily /> : <Matrix />}
+      <PageHeader title="الشحنات" subtitle="إدخال الشحنات يومياً لكل مندوب، أو إدخال إجمالي الشهر مباشرة. المجموع يُستخدم لحساب الحافز الشهري" />
+      <Tabs active={tab} onChange={setTab} tabs={[{ key: 'daily', label: 'إدخال يومي' }, { key: 'monthly', label: 'إدخال شهري' }, { key: 'matrix', label: 'الجدول الشهري' }]} />
+      {tab === 'daily' && <Daily />}
+      {tab === 'monthly' && <Monthly />}
+      {tab === 'matrix' && <Matrix />}
     </>
   );
 }
@@ -29,14 +32,21 @@ function Daily() {
   const editable = canEdit(role, 'shipments') && !closed && date <= today();
 
   const drivers = useMemo(() => db.employees
-    .filter((e) => e.role === 'driver' && employedInMonth(e, month) && (!e.hireDate || e.hireDate <= date))
+    .filter((e) => isDriver(e) && employedInMonth(e, month) && (!e.hireDate || e.hireDate <= date))
     .sort((a, b) => a.name.localeCompare(b.name, 'ar')), [db.employees, month, date]);
 
   const saved = useMemo(() => {
     const map = {};
-    db.shipments.filter((s) => s.date === date).forEach((s) => { map[s.employeeId] = s.count; });
+    db.shipments.filter((s) => s.date === date && !s.monthly).forEach((s) => { map[s.employeeId] = s.count; });
     return map;
   }, [db.shipments, date]);
+
+  // المناديب المُدخل لهم إجمالي شهري لا يُدخل لهم يومياً في نفس الشهر
+  const monthlyOf = useMemo(() => {
+    const map = {};
+    db.shipments.filter((s) => s.monthly && monthOf(s.date) === month).forEach((s) => { map[s.employeeId] = s.count; });
+    return map;
+  }, [db.shipments, month]);
 
   const [values, setValues] = useState({});
   const [dirty, setDirty] = useState(false);
@@ -49,9 +59,10 @@ function Daily() {
   const dayTotal = Object.values(values).reduce((s, v) => s + (Number(v) || 0), 0);
 
   const save = () => {
-    const rows = drivers.filter((d) => values[d.id] !== '' && values[d.id] !== undefined)
+    const daily = drivers.filter((d) => monthlyOf[d.id] === undefined);
+    const rows = daily.filter((d) => values[d.id] !== '' && values[d.id] !== undefined)
       .map((d) => ({ employeeId: d.id, date, count: Math.max(0, Math.round(Number(values[d.id]) || 0)) }));
-    const ids = new Set(drivers.map((d) => d.id));
+    const ids = new Set(daily.map((d) => d.id));
     replaceWhere('shipments', (s) => s.date === date && ids.has(s.employeeId), rows, `حفظ شحنات يوم ${date} (${rows.reduce((s, r) => s + r.count, 0)} شحنة)`);
     setDirty(false);
   };
@@ -87,6 +98,18 @@ function Daily() {
                 const rule = ruleForEmployee(db, d, month);
                 const base = (monthCounts[d.id] || 0) - (Number(saved[d.id]) || 0);
                 const total = base + (Number(values[d.id]) || 0);
+                if (monthlyOf[d.id] !== undefined) {
+                  const m = monthCounts[d.id] || 0;
+                  return (
+                    <tr key={d.id}>
+                      <td><Link to={`/employees/${d.id}`}>{d.name}</Link><div className="sub">{d.externalId}</div></td>
+                      <td><Badge tone="navy">مُدخل شهرياً</Badge></td>
+                      <td className="num strong">{fmtInt(m)}</td>
+                      <td><Bar value={m} max={rule.threshold} tone={m > rule.threshold ? 'teal' : 'navy'} /></td>
+                      <td>{m > rule.threshold ? <Badge tone="teal">+{fmtInt(m - rule.threshold)} إضافية</Badge> : <span className="small muted">باقي {fmtInt(rule.threshold - m)}</span>}</td>
+                    </tr>
+                  );
+                }
                 return (
                   <tr key={d.id}>
                     <td><Link to={`/employees/${d.id}`}>{d.name}</Link><div className="sub">{d.externalId}{d.status === 'leave' ? ' · في إجازة' : ''}</div></td>
@@ -111,12 +134,105 @@ function Daily() {
   );
 }
 
+// إدخال إجمالي شحنات الشهر لكل مندوب دفعة واحدة (بديل عن الإدخال اليومي)
+function Monthly() {
+  const db = useDb();
+  const { role } = useSession();
+  const [month, setMonth] = useState(thisMonth());
+  const closed = isClosed(db, month);
+  const editable = canEdit(role, 'shipments') && !closed && month <= thisMonth();
+  const drivers = useMemo(() => db.employees.filter((e) => isDriver(e, db) && employedInMonth(e, month))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ar')), [db, month]);
+  const info = useMemo(() => {
+    const map = {};
+    drivers.forEach((d) => { map[d.id] = { total: 0, daily: 0, monthly: false }; });
+    db.shipments.filter((s) => monthOf(s.date) === month && map[s.employeeId]).forEach((s) => {
+      const x = map[s.employeeId];
+      x.total += Number(s.count) || 0;
+      if (s.monthly) x.monthly = true; else x.daily += 1;
+    });
+    return map;
+  }, [db.shipments, drivers, month]);
+
+  const [values, setValues] = useState({});
+  useEffect(() => {
+    setValues(Object.fromEntries(drivers.map((d) => [d.id, info[d.id].monthly || info[d.id].daily ? info[d.id].total : ''])));
+  }, [info, drivers]);
+
+  // المتغيّر فقط هو ما يُحفظ: قيمة جديدة، أو تعديل الإجمالي، أو تفريغ قيمة شهرية
+  const changed = drivers.filter((d) => {
+    const v = values[d.id];
+    const x = info[d.id];
+    if (!x) return false;
+    if (v === '' || v === undefined) return x.monthly;
+    if (!x.monthly && x.daily === 0) return true;
+    return Number(v) !== x.total;
+  });
+  const total = drivers.reduce((s, d) => s + (Number(values[d.id]) || 0), 0);
+
+  const save = () => {
+    const overwrite = changed.filter((d) => info[d.id].daily > 0);
+    if (overwrite.length) {
+      const names = overwrite.map((d) => `• ${d.name} (${info[d.id].daily} يوم)`).join('\n');
+      if (!window.confirm(`المناديب التالية لهم إدخال يومي في ${monthLabel(month)} وسيُستبدل بالإجمالي الشهري:\n\n${names}\n\nمتابعة؟`)) return;
+    }
+    const ids = new Set(changed.map((d) => d.id));
+    const rows = changed.filter((d) => values[d.id] !== '' && values[d.id] !== undefined)
+      .map((d) => ({ employeeId: d.id, date: monthEnd(month), count: Math.max(0, Math.round(Number(values[d.id]) || 0)), monthly: true }));
+    replaceWhere('shipments', (s) => ids.has(s.employeeId) && monthOf(s.date) === month, rows,
+      `إدخال شهري لشحنات ${monthLabel(month)}: ${rows.length} مندوب (${rows.reduce((s, r) => s + r.count, 0)} شحنة)`);
+  };
+
+  return (
+    <>
+      <div className="toolbar">
+        <MonthSelect value={month} onChange={setMonth} />
+        <span className="spacer" />
+        {editable && <Button icon="check" onClick={save} disabled={!changed.length}>حفظ إجمالي الشهر</Button>}
+      </div>
+      {closed && <Notice tone="warn">شهر {monthLabel(month)} مُقفل مالياً — لا يمكن تعديل الشحنات.</Notice>}
+      <Notice>اكتب إجمالي ما سلّمه كل مندوب خلال الشهر. من له إدخال يومي يظهر مجموعه، وإذا عدّلت رقمه هنا يُستبدل الإدخال اليومي بالإجمالي.</Notice>
+      <div className="stats">
+        <Stat icon="box" tone="orange" label={`إجمالي ${monthLabel(month)}`} value={fmtInt(total)} hint={`${drivers.length} مندوب`} />
+      </div>
+      <Card flush>
+        <div className="table-wrap">
+          <table className="table ship-grid">
+            <thead><tr><th>المندوب</th><th>إجمالي شحنات الشهر</th><th>طريقة الإدخال الحالية</th><th style={{ width: '26%' }}>التقدم نحو الحد</th><th>الحالة</th></tr></thead>
+            <tbody>
+              {drivers.map((d) => {
+                const rule = ruleForEmployee(db, d, month);
+                const n = Number(values[d.id]) || 0;
+                const x = info[d.id];
+                return (
+                  <tr key={d.id}>
+                    <td><Link to={`/employees/${d.id}`}>{d.name}</Link><div className="sub">{d.externalId}</div></td>
+                    <td>
+                      <input type="number" min="0" inputMode="numeric" value={values[d.id] ?? ''} disabled={!editable} style={{ width: 120 }}
+                        onChange={(e) => setValues((v) => ({ ...v, [d.id]: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const inputs = [...document.querySelectorAll('.ship-grid input')]; inputs[inputs.indexOf(e.target) + 1]?.focus(); } }}
+                        aria-label={`إجمالي شحنات ${d.name}`} />
+                    </td>
+                    <td>{x.monthly ? <Badge tone="navy">شهري</Badge> : x.daily ? <Badge tone="teal">يومي ({x.daily} يوم)</Badge> : <span className="muted small">لم يُدخل</span>}</td>
+                    <td><Bar value={n} max={rule.threshold} tone={n > rule.threshold ? 'teal' : 'navy'} /></td>
+                    <td>{n > rule.threshold ? <Badge tone="teal">+{fmtInt(n - rule.threshold)} إضافية</Badge> : <span className="small muted">باقي {fmtInt(rule.threshold - n)}</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 function Matrix() {
   const db = useDb();
   const [month, setMonth] = useState(thisMonth());
   const days = daysInMonth(month);
   const dayList = Array.from({ length: days }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`);
-  const drivers = db.employees.filter((e) => e.role === 'driver' && employedInMonth(e, month)).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const drivers = db.employees.filter((e) => isDriver(e) && employedInMonth(e, month)).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   const cell = {};
   db.shipments.filter((s) => monthOf(s.date) === month).forEach((s) => { cell[`${s.employeeId}|${s.date}`] = s.count; });
   const totals = shipmentsByEmployee(db, month);
@@ -151,7 +267,7 @@ function Matrix() {
                 const t = totals[e.id] || 0;
                 return (
                   <tr key={e.id}>
-                    <td className="name">{e.name}</td>
+                    <td className="name">{e.name}{db.shipments.some((x) => x.monthly && x.employeeId === e.id && monthOf(x.date) === month) && <div className="sub">إدخال شهري</div>}</td>
                     {dayList.map((d) => <td key={d} className={weekdayAr(d) === 'الجمعة' ? 'fri' : ''}>{cell[`${e.id}|${d}`] ?? ''}</td>)}
                     <td className="strong">{fmtInt(t)}</td>
                     <td className={t > r.threshold ? 'over' : ''}>{t > r.threshold ? fmtInt(t - r.threshold) : '—'}</td>

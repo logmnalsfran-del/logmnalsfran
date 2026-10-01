@@ -1,10 +1,11 @@
 // نماذج العمليات على السيارات: صيانة، وقود، حوادث، جداول صيانة، تسليم واستلام العهدة
 import { Modal, Field, FormGrid, Button, useForm } from './ui';
 import { insert, update, bumpOdometer, getState } from '../lib/db';
-import { MAINT_TYPES, INCIDENT_KINDS } from '../lib/constants';
 import { today } from '../lib/format';
 import { currentCustody, isClosed } from '../lib/calc';
 import { monthOf } from '../lib/format';
+import { labelOf, isDriver } from '../lib/lookups';
+import { LookupField, SuggestField } from './Lookup';
 
 const vehicleOptions = (db, withEmpty) => [
   ...(withEmpty ? [{ value: '', label: '— اختر السيارة —' }] : []),
@@ -12,7 +13,7 @@ const vehicleOptions = (db, withEmpty) => [
 ];
 const driverOptions = (db, withEmpty = true) => [
   ...(withEmpty ? [{ value: '', label: '— غير محدد —' }] : []),
-  ...db.employees.filter((e) => e.role === 'driver' && e.status !== 'terminated').map((e) => ({ value: e.id, label: e.name })),
+  ...db.employees.filter((e) => isDriver(e) && e.status !== 'terminated').map((e) => ({ value: e.id, label: e.name })),
 ];
 const footer = (save, onClose) => <><Button onClick={save} icon="check">حفظ</Button><Button variant="ghost" onClick={onClose}>إلغاء</Button></>;
 function closedGuard(date) {
@@ -38,9 +39,9 @@ export function MaintenanceForm({ record, vehicleId, onClose }) {
       <FormGrid cols={2}>
         <Field label="السيارة *" as="select" options={vehicleOptions(db, true)} {...bind('vehicleId')} span={2} />
         <Field label="التاريخ" type="date" {...bind('date')} />
-        <Field label="النوع" as="select" options={Object.entries(MAINT_TYPES).map(([value, label]) => ({ value, label }))} {...bind('type')} />
+        <LookupField label="النوع" list="maintTypes" {...bind('type')} />
         <Field label="الوصف *" {...bind('description')} span={2} placeholder="مثال: غيار زيت وفلتر" />
-        <Field label="الورشة" {...bind('workshop')} />
+        <SuggestField label="الورشة" col="maintenance" field="workshop" {...bind('workshop')} />
         <Field label="قطع الغيار" {...bind('parts')} />
         <Field label="التكلفة (ر.س)" type="number" min="0" {...bind('cost')} />
         <Field label="قراءة العداد (كم)" type="number" min="0" {...bind('odometer')} />
@@ -91,8 +92,8 @@ export function IncidentForm({ record, vehicleId, onClose }) {
     if (!v.vehicleId) return alert('السيارة مطلوبة');
     if (closedGuard(v.date) || (record && closedGuard(record.date))) return;
     const data = { ...v, cost: Number(v.cost) || 0 };
-    if (record) update('incidents', record.id, data, `تعديل ${INCIDENT_KINDS[v.kind]} — ${plateOf(v.vehicleId)}`);
-    else insert('incidents', data, `${INCIDENT_KINDS[v.kind]} — ${plateOf(v.vehicleId)} (${data.cost} ر.س)`);
+    if (record) update('incidents', record.id, data, `تعديل ${labelOf('incidentKinds', v.kind)} — ${plateOf(v.vehicleId)}`);
+    else insert('incidents', data, `${labelOf('incidentKinds', v.kind)} — ${plateOf(v.vehicleId)} (${data.cost} ر.س)`);
     onClose();
   };
   return (
@@ -100,7 +101,7 @@ export function IncidentForm({ record, vehicleId, onClose }) {
       <FormGrid cols={2}>
         <Field label="السيارة *" as="select" options={vehicleOptions(db, true)} value={v.vehicleId} onChange={onVehicle} span={2} />
         <Field label="السائق المسؤول" as="select" options={driverOptions(db)} {...bind('employeeId')} hint="يُقترح تلقائياً من العهدة الحالية" />
-        <Field label="النوع" as="select" options={Object.entries(INCIDENT_KINDS).map(([value, label]) => ({ value, label }))} {...bind('kind')} />
+        <LookupField label="النوع" list="incidentKinds" {...bind('kind')} />
         <Field label="التاريخ" type="date" {...bind('date')} />
         <Field label="التكلفة على الشركة (ر.س)" type="number" min="0" {...bind('cost')} hint="لا تُخصم من المندوب (قرار الإدارة)" />
         <Field label="الوصف" as="textarea" {...bind('description')} span={2} />
@@ -138,7 +139,7 @@ export function HandoverForm({ vehicle, onClose }) {
   const db = getState();
   const busy = new Set(db.custody.filter((c) => !c.toDate).map((c) => c.employeeId));
   const options = [{ value: '', label: '— اختر المندوب —' }, ...db.employees
-    .filter((e) => e.role === 'driver' && e.status === 'active')
+    .filter((e) => isDriver(e) && e.status === 'active')
     .map((e) => ({ value: e.id, label: `${e.name}${busy.has(e.id) ? ' (لديه سيارة)' : ''}` }))];
   const { values: v, bind } = useForm({ employeeId: '', fromDate: today(), odometerOut: vehicle.odometer, conditionOut: 'سليمة' });
   const save = () => {

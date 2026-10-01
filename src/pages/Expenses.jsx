@@ -6,7 +6,8 @@ import {
 } from '../components/ui';
 import { monthExpenses, expensesByCategory, categoryName, installmentsInMonth, isClosed } from '../lib/calc';
 import { thisMonth, monthLabel, money, fmtDate, round2, addMonths, today, monthOf } from '../lib/format';
-import { SYSTEM_CATEGORIES, PAY_METHODS } from '../lib/constants';
+import { SYSTEM_CATEGORIES } from '../lib/constants';
+import { LookupField } from '../components/Lookup';
 import { downloadCSV, printPage } from '../lib/export';
 
 const SOURCES = {
@@ -161,7 +162,7 @@ export default function Expenses() {
       {tab === 'installments' && (
         <Card flush>
           <div style={{ padding: '14px 20px 0' }}>
-            <Notice>أقساط السيارات التزام نقدي لسداد ثمن السيارة، ولا تُحسب مصروفاً تشغيلياً حتى لا تتكرر تكلفة السيارة؛ تكلفة السيارة تُحمَّل على الأرباح عبر <strong>مخصص الهالك</strong>.</Notice>
+            <Notice>أقساط السيارات التزام نقدي لسداد ثمن السيارة، ولا تُحسب مصروفاً تشغيلياً؛ ثمن السيارات رأس مال يُسترد من الأرباح عبر <strong>حساب استرداد رأس المال</strong>.</Notice>
           </div>
           {inst.length === 0 ? <Empty>لا توجد أقساط مستحقة هذا الشهر</Empty> : (
             <table className="table">
@@ -203,7 +204,7 @@ function ExpenseForm({ record, month, onClose }) {
         <Field label="الفئة" as="select" options={catOptions(db)} {...bind('categoryId')} />
         <Field label="البيان *" {...bind('description')} span={2} />
         <Field label="المبلغ (ر.س) *" type="number" min="0" {...bind('amount')} />
-        <Field label="طريقة الدفع" as="select" options={Object.entries(PAY_METHODS).map(([value, label]) => ({ value, label }))} {...bind('paymentMethod')} />
+        <LookupField label="طريقة الدفع" list="payMethods" {...bind('paymentMethod')} />
         <Field label="مرتبط بسيارة (اختياري)" as="select" span={2} options={[{ value: '', label: '— لا —' }, ...db.vehicles.map((x) => ({ value: x.id, label: `${x.plate} — ${x.make} ${x.model}` }))]} {...bind('vehicleId')} />
       </FormGrid>
       <p className="small muted">الرواتب والصيانة والوقود والحوادث تُضاف تلقائياً من شاشاتها — لا تكررها هنا.</p>

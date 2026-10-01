@@ -2,7 +2,8 @@
 import {
   monthOf, monthStart, monthEnd, monthDiff, addDays, daysUntil, round2, addMonths,
 } from './format';
-import { EMP_DOCS, VEH_DOCS, SYSTEM_CATEGORIES } from './constants';
+import { SYSTEM_CATEGORIES } from './constants';
+import { entriesOf, shipmentRoles } from './lookups';
 
 // ---------- الإقفال ----------
 export const isClosed = (db, month) => db.closedMonths.some((c) => c.month === month);
@@ -39,7 +40,11 @@ export function employedInMonth(emp, month) {
   if (emp.status === 'terminated' && !emp.terminationDate) return false;
   return true;
 }
-export const activeDrivers = (db) => db.employees.filter((e) => e.role === 'driver' && e.status !== 'terminated');
+export function driversOf(db) {
+  const roles = shipmentRoles(db);
+  return db.employees.filter((e) => roles.has(e.role));
+}
+export const activeDrivers = (db) => driversOf(db).filter((e) => e.status !== 'terminated');
 
 export function currentCustody(db, vehicleId) {
   return db.custody.find((c) => c.vehicleId === vehicleId && !c.toDate);
@@ -52,13 +57,15 @@ export function custodyOfEmployee(db, employeeId) {
 // لا يوجد تناسب ولا حد أدنى (قرار صاحب المصلحة): الراتب كامل لكل من كان على رأس العمل في الشهر
 export function computePayroll(db, month) {
   const counts = shipmentsByEmployee(db, month);
+  const roles = shipmentRoles(db);
   const rows = db.employees
     .filter((e) => employedInMonth(e, month))
     .map((e) => {
       const base = Number(e.baseSalary) || 0;
       const allowances = Number(e.allowances) || 0;
       let shipments = 0; let threshold = 0; let rate = 0; let extra = 0; let incentive = 0; let custom = false;
-      if (e.role === 'driver') {
+      const driver = roles.has(e.role);
+      if (driver) {
         shipments = counts[e.id] || 0;
         ({ threshold, rate, custom } = ruleForEmployee(db, e, month));
         extra = Math.max(0, shipments - threshold);
@@ -69,12 +76,12 @@ export function computePayroll(db, month) {
       const deductions = adj.filter((a) => a.kind === 'deduction').reduce((s, a) => s + Number(a.amount), 0);
       const net = round2(base + allowances + incentive + additions - deductions);
       return {
-        employeeId: e.id, name: e.name, role: e.role, base, allowances, shipments, threshold, rate, custom,
+        employeeId: e.id, name: e.name, role: e.role, driver, base, allowances, shipments, threshold, rate, custom,
         extra, incentive, additions, deductions, net,
       };
     });
-  const order = { supervisor: 0, maintenance: 1, driver: 2, other: 3 };
-  rows.sort((a, b) => (order[a.role] - order[b.role]) || a.name.localeCompare(b.name, 'ar'));
+  const rank = (r) => (r.driver ? 2 : r.role === 'supervisor' ? 0 : 1);
+  rows.sort((a, b) => (rank(a) - rank(b)) || a.name.localeCompare(b.name, 'ar'));
   return rows;
 }
 export function payrollFor(db, month) {
@@ -103,7 +110,7 @@ export function installmentsRemaining(v, month) {
 
 // ---------- المصروفات الشهرية الموحّدة ----------
 // تجمع: المصروفات اليدوية + المتكررة + ما يتولد تلقائياً من الرواتب والصيانة والوقود والحوادث.
-// أقساط السيارات ليست مصروفاً تشغيلياً (تكلفة السيارة تُحمَّل عبر مخصص الهالك) وتظهر كالتزام نقدي منفصل.
+// أقساط السيارات ليست مصروفاً تشغيلياً (ثمن السيارة رأس مال يُسترد عبر حساب استرداد رأس المال) وتظهر كالتزام نقدي منفصل.
 export function categoryName(db, id) {
   if (SYSTEM_CATEGORIES[id]) return SYSTEM_CATEGORIES[id];
   return db.expenseCategories.find((c) => c.id === id)?.name || 'غير مصنف';
@@ -148,34 +155,39 @@ export function expensesByCategory(db, month) {
 }
 export const totalExpenses = (db, month) => round2(monthExpenses(db, month).reduce((s, i) => s + i.amount, 0));
 
-// ---------- مخصص الهالك ----------
-export function vehicleMonthlyDepreciation(v) {
-  const life = Number(v.usefulLifeMonths) || 0;
-  if (!life) return 0;
-  return Math.max(0, (Number(v.price) || 0) - (Number(v.residualValue) || 0)) / life;
-}
-// يبدأ الإهلاك من شهر الشراء ويستمر حتى اكتمال العمر الإنتاجي أو خروج السيارة من الخدمة
-export function depreciationBreakdown(db, month) {
-  return db.vehicles.map((v) => {
-    if (!v.purchaseDate) return null;
-    const idx = monthDiff(monthOf(v.purchaseDate), month);
-    if (idx < 0 || idx >= Number(v.usefulLifeMonths || 0)) return null;
-    if (v.disposal?.date && monthOf(v.disposal.date) < month) return null;
-    return { vehicleId: v.id, plate: v.plate, amount: round2(vehicleMonthlyDepreciation(v)), monthIndex: idx + 1, life: Number(v.usefulLifeMonths) };
-  }).filter(Boolean);
+// ---------- حساب استرداد رأس المال ----------
+// عند تسجيل كل إيراد تُحدَّد نسبة منه تُستقطع من الأرباح وتُرحَّل (عند إقفال الشهر) إلى حساب منفصل
+// الغرض منه استرداد رأس المال المستثمر. النسبة تتغير من شهر لآخر.
+export function recoveryBreakdown(db, month) {
+  const items = db.revenues.filter((r) => r.month === month).map((r) => ({
+    id: r.id, description: r.description, amount: Number(r.amount) || 0, pct: Number(r.recoveryPct) || 0,
+    recovery: round2((Number(r.amount) || 0) * (Number(r.recoveryPct) || 0) / 100),
+  }));
+  const auto = revenueFor(db, month).auto;
+  if (auto > 0) {
+    const pct = Number(db.settings.defaultRecoveryPct) || 0;
+    items.push({ id: 'auto', description: 'إيراد الشحنات التلقائي', amount: auto, pct, recovery: round2(auto * pct / 100) });
+  }
+  return items;
 }
 export function provisionFor(db, month) {
-  const dep = db.settings.depreciation || { method: 'straight_line' };
-  if (dep.method === 'fixed') return round2(Number(dep.fixedAmount) || 0);
-  return round2(depreciationBreakdown(db, month).reduce((s, d) => s + d.amount, 0));
+  return round2(recoveryBreakdown(db, month).reduce((s, i) => s + i.recovery, 0));
 }
 export function reserveBalance(db) {
   return round2(db.reserve.reduce((s, r) => s + (r.type === 'deposit' ? 1 : -1) * Number(r.amount), 0));
 }
-export function accumulatedDepreciation(db, v, uptoMonth) {
-  if (!v.purchaseDate) return 0;
-  const months = Math.min(Number(v.usefulLifeMonths || 0), Math.max(0, monthDiff(monthOf(v.purchaseDate), uptoMonth) + 1));
-  return round2(months * vehicleMonthlyDepreciation(v));
+// رأس المال المستثمر: القيمة المحددة في الإعدادات، وإلا مجموع أسعار شراء السيارات
+export function capitalStatus(db) {
+  const manual = Number(db.settings.capitalAmount) || 0;
+  const capital = manual > 0 ? manual : round2(db.vehicles.reduce((s, v) => s + (Number(v.price) || 0), 0));
+  const recovered = round2(db.reserve.filter((r) => r.type === 'deposit').reduce((s, r) => s + Number(r.amount), 0));
+  return { capital, recovered, remaining: Math.max(0, round2(capital - recovered)), pct: capital > 0 ? Math.min(100, (recovered / capital) * 100) : 0, manual: manual > 0 };
+}
+// النسبة المقترحة عند تسجيل إيراد جديد: آخر نسبة مستخدمة، وإلا الافتراضية من الإعدادات
+export function suggestedRecoveryPct(db) {
+  const key = (r) => `${r.month}|${r.createdAt || ''}`;
+  const last = [...db.revenues].filter((r) => r.source !== 'بيع أصول').sort((a, b) => key(b).localeCompare(key(a)))[0];
+  return last && last.recoveryPct !== undefined && last.recoveryPct !== null ? Number(last.recoveryPct) : Number(db.settings.defaultRecoveryPct) || 0;
 }
 
 // ---------- الإيرادات والأرباح ----------
@@ -196,8 +208,10 @@ export function profitFor(db, month) {
 }
 
 // ---------- تكلفة السيارة ----------
-export function vehicleCosts(db, v) {
-  const sum = (arr) => round2(arr.filter((x) => x.vehicleId === v.id).reduce((s, x) => s + Number(x.cost || x.amount || 0), 0));
+// range اختياري: { from, to } بصيغة YYYY-MM لحصر تكاليف التشغيل في فترة
+export function vehicleCosts(db, v, range) {
+  const inRange = (x) => !range || ((!range.from || monthOf(x.date) >= range.from) && (!range.to || monthOf(x.date) <= range.to));
+  const sum = (arr) => round2(arr.filter((x) => x.vehicleId === v.id && inRange(x)).reduce((s, x) => s + Number(x.cost || x.amount || 0), 0));
   const maintenance = sum(db.maintenance);
   const fuel = sum(db.fuel);
   const incidents = sum(db.incidents);
@@ -216,13 +230,13 @@ export function alerts(db) {
     out.push({ ...base, date: d, left, level: left < 0 ? 'expired' : left <= 7 ? 'urgent' : 'soon' });
   };
   db.employees.filter((e) => e.status !== 'terminated').forEach((e) => {
-    Object.entries(EMP_DOCS).forEach(([k, label]) => {
+    entriesOf('empDocs', db).forEach(([k, label]) => {
       const doc = e.docs?.[k];
       if (doc?.expiry) push(doc.expiry, { kind: 'employee', refId: e.id, title: `${label} — ${e.name}` });
     });
   });
   db.vehicles.filter((v) => v.status !== 'sold').forEach((v) => {
-    Object.entries(VEH_DOCS).forEach(([k, label]) => {
+    entriesOf('vehDocs', db).forEach(([k, label]) => {
       const doc = v.docs?.[k];
       if (doc?.expiry) push(doc.expiry, { kind: 'vehicle', refId: v.id, title: `${label} — سيارة ${v.plate}` });
     });

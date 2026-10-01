@@ -24,7 +24,8 @@ export function buildSeed() {
     alertDays: 30,
     incentiveRules: [{ id: uid(), from: addMonths(M, -12), threshold: 1000, rate: 2, note: 'القاعدة الأساسية' }],
     revenuePerShipment: 0,
-    depreciation: { method: 'straight_line', fixedAmount: 10000 },
+    defaultRecoveryPct: 10,
+    capitalAmount: 0,
   };
 
   // ---------- الموظفون ----------
@@ -94,7 +95,7 @@ export function buildSeed() {
         inspection: { number: `FAH-${300 + i}`, expiry: rel([150, 95, -6, 260, 40, 190, 75, 310, 16, 220][i]) },
         operatingCard: { number: `OP-${1200 + i}`, expiry: rel([240, 330, 110, 19, 280, 150, 360, 60, 200, 100][i]) },
       },
-      usefulLifeMonths: 60, residualValue: 20000, disposal: null, notes: '',
+      disposal: null, notes: '',
     };
   });
 
@@ -185,16 +186,16 @@ export function buildSeed() {
 
   const db = {
     settings, employees, vehicles, custody, maintenance, schedules, fuel, incidents, shipments, adjustments,
-    payrollRuns: [], expenseCategories, expenses, recurring, revenues: [], reserve: [], closedMonths: [], audit: [],
+    payrollRuns: [], lookups: [], expenseCategories, expenses, recurring, revenues: [], reserve: [], closedMonths: [], audit: [],
   };
 
   // إيرادات الأشهر: ما تدفعه الشركة الكبرى (أرقام توضيحية ≈ 9.5 ريال للشحنة)
-  months.slice(0, 2).forEach((m) => {
+  months.slice(0, 2).forEach((m, mi) => {
     const count = shipments.filter((s) => s.date.startsWith(m)).reduce((s, x) => s + x.count, 0);
-    db.revenues.push({ id: uid(), month: m, date: `${addMonths(m, 1)}-05`, amount: Math.round(count * 9.5 / 100) * 100, description: 'مستحقات الشركة الرئيسية عن الشحنات', source: 'الشركة الرئيسية' });
+    db.revenues.push({ id: uid(), month: m, date: `${addMonths(m, 1)}-05`, amount: Math.round(count * 9.5 / 100) * 100, description: 'مستحقات الشركة الرئيسية عن الشحنات', source: 'الشركة الرئيسية', recoveryPct: [10, 12][mi] });
   });
 
-  // اعتماد رواتب الشهرين السابقين وإقفالهما وترحيل مخصص الهالك
+  // اعتماد رواتب الشهرين السابقين وإقفالهما وترحيل نسبة استرداد رأس المال
   months.slice(0, 2).forEach((m) => {
     const rows = computePayroll(db, m);
     db.payrollRuns.push({ id: uid(), month: m, approvedAt: `${monthEnd(m)}T18:00:00.000Z`, approvedBy: 'المالك / المدير العام', rows, total: round2(rows.reduce((s, r) => s + r.net, 0)) });
@@ -205,7 +206,7 @@ export function buildSeed() {
     const provision = provisionFor(db, m);
     const operatingProfit = round2(revenue - expensesTotal);
     db.closedMonths.push({ id: uid(), month: m, closedAt: `${addMonths(m, 1)}-06T10:00:00.000Z`, revenue, expenses: expensesTotal, operatingProfit, provision, net: round2(operatingProfit - provision) });
-    db.reserve.push({ id: uid(), date: `${addMonths(m, 1)}-06`, month: m, type: 'deposit', amount: provision, note: `مخصص هالك شهر ${m}` });
+    db.reserve.push({ id: uid(), date: `${addMonths(m, 1)}-06`, month: m, type: 'deposit', amount: provision, note: `استرداد رأس المال — شهر ${m}` });
   });
 
   db.audit.push({ id: uid(), at: new Date().toISOString(), user: 'النظام', action: 'تهيئة', entity: 'البيانات', details: 'تحميل البيانات التجريبية' });
